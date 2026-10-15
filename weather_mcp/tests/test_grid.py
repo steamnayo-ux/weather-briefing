@@ -1,6 +1,5 @@
 import pytest
-from services.grid import latlon_to_grid
-
+from weather_mcp.services.grid import latlon_to_grid
 
 # (이름, 위도, 경도, 기대 nx, 기대 ny)
 @pytest.mark.parametrize("name, lat, lon, nx, ny", [
