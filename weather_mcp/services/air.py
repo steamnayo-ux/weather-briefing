@@ -1,4 +1,5 @@
 """대기질 조회 서비스 (에어코리아: 근접측정소 찾기 + 실시간 측정값)."""
+import time
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,8 +18,11 @@ BASE = "https://apis.data.go.kr/B552584"
 NEARBY_URL = f"{BASE}/MsrstnInfoInqireSvc/getNearbyMsrstnList"           # 근접측정소
 REALTIME_URL = f"{BASE}/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty"  # 실시간 측정값
 
-TIMEOUT = httpx.Timeout(15.0, connect=5.0)  # 읽기 15초, 연결 5초
-MAX_ATTEMPTS = 2  # 타임아웃일 때만 1회 재시도
+# 서버가 느릴 때 게이트웨이가 약 30초 뒤 504를 돌려주는 것이 관찰되어, 그 응답까지 기다린다
+TIMEOUT = httpx.Timeout(35.0, connect=5.0)  # 읽기 35초, 연결 5초
+MAX_ATTEMPTS = 2  # 일시적 오류(타임아웃, 502/503/504)일 때만 1회 재시도
+RETRY_STATUS = {502, 503, 504}  # 게이트웨이의 일시적 오류 코드
+RETRY_WAIT_SECONDS = 1.0  # 재시도 전 잠깐 쉰다
 
 # 등급 코드 -> 한글
 GRADE_TEXT = {1: "좋음", 2: "보통", 3: "나쁨", 4: "매우나쁨"}
@@ -69,7 +73,7 @@ def _build_result(station: dict, row: dict) -> dict:
 def _call_airkorea(url: str, params: dict) -> list[dict]:
     """에어코리아 API를 호출해 items 목록을 반환한다. 실패하면 AirKoreaError.
 
-    타임아웃(서버가 느릴 때)만 한 번 더 시도하고, 그 밖의 오류는 바로 중단한다.
+    일시적 오류(타임아웃, 502/503/504)만 한 번 더 시도하고, 그 밖의 오류는 바로 중단한다.
     """
     data = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -79,11 +83,18 @@ def _call_airkorea(url: str, params: dict) -> list[dict]:
             data = resp.json()
             break  # 성공
         except httpx.TimeoutException as exc:  # HTTPError보다 먼저 잡아야 한다
-            if attempt == MAX_ATTEMPTS:
-                raise AirKoreaError(f"에어코리아 API 호출 실패 ({type(exc).__name__})") from None
+            failure, retryable = type(exc).__name__, True
+        except httpx.HTTPStatusError as exc:  # HTTPError보다 먼저 잡아야 한다
+            code = exc.response.status_code
+            failure, retryable = f"HTTP {code}", code in RETRY_STATUS
         except (httpx.HTTPError, ValueError) as exc:
-            # str(exc)에는 URL(인증키 포함)이 들어갈 수 있어서 클래스 이름만 노출
-            raise AirKoreaError(f"에어코리아 API 호출 실패 ({type(exc).__name__})") from None
+            failure, retryable = type(exc).__name__, False
+
+        if retryable and attempt < MAX_ATTEMPTS:
+            time.sleep(RETRY_WAIT_SECONDS)
+            continue
+        # str(exc)에는 URL(인증키 포함)이 들어갈 수 있어서 이름/상태코드만 노출
+        raise AirKoreaError(f"에어코리아 API 호출 실패 ({failure})") from None
 
     try:
         header = data["response"]["header"]
@@ -92,7 +103,6 @@ def _call_airkorea(url: str, params: dict) -> list[dict]:
         return data["response"]["body"]["items"] or []  # 데이터가 없으면 ""로 올 수 있다
     except (KeyError, TypeError):
         raise AirKoreaError("에어코리아 응답 형식이 예상과 다릅니다") from None
-
 
 def get_air_quality(lat: float, lon: float) -> dict:
     """위경도에서 가장 가까운 측정소의 미세먼지 정보를 반환한다.

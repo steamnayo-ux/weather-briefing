@@ -76,39 +76,69 @@ def test_error_when_all_stations_have_no_data(monkeypatch):
     assert "error" in air.get_air_quality(37.5172, 127.0473)
 
 
-# --- 타임아웃 재시도 ---
+# --- 일시적 오류 재시도 ---
 class _FakeResp:
-    """httpx 응답 흉내: 정상 응답 하나."""
+    """httpx 응답 흉내. status가 400 이상이면 raise_for_status()가 오류를 낸다."""
+    def __init__(self, status=200):
+        self.status = status
+
     def raise_for_status(self):
-        pass
+        if self.status >= 400:
+            raise httpx.HTTPStatusError(
+                "err", request=httpx.Request("GET", "http://x"),
+                response=httpx.Response(self.status),
+            )
 
     def json(self):
         return {"response": {"header": {"resultCode": "00", "resultMsg": "OK"},
                              "body": {"items": [{"a": 1}]}}}
 
 
-def test_call_retries_once_on_timeout(monkeypatch):
+def _patch_get(monkeypatch, outcomes):
+    """httpx.get을 가짜로 바꾼다. outcomes를 차례로 하나씩 사용하고 호출 횟수를 센다.
+
+    outcomes의 각 항목: 예외 객체(발생시킴) 또는 _FakeResp(돌려줌)
+    """
     calls = {"n": 0}
 
     def fake_get(url, params, timeout):
+        outcome = outcomes[calls["n"]]
         calls["n"] += 1
-        if calls["n"] == 1:
-            raise httpx.ReadTimeout("느림")  # 첫 시도는 타임아웃
-        return _FakeResp()
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
     monkeypatch.setattr(air.httpx, "get", fake_get)
+    monkeypatch.setattr(air.time, "sleep", lambda seconds: None)  # 테스트가 느려지지 않게
+    return calls
+
+
+def test_call_retries_once_on_timeout(monkeypatch):
+    calls = _patch_get(monkeypatch, [httpx.ReadTimeout("느림"), _FakeResp()])
     assert air._call_airkorea("http://x", {}) == [{"a": 1}]
     assert calls["n"] == 2  # 한 번 재시도해서 성공
 
 
 def test_call_gives_up_after_two_timeouts(monkeypatch):
-    def fake_get(url, params, timeout):
-        raise httpx.ReadTimeout("느림")
-
-    monkeypatch.setattr(air.httpx, "get", fake_get)
+    calls = _patch_get(monkeypatch, [httpx.ReadTimeout("느림"), httpx.ReadTimeout("느림")])
     with pytest.raises(air.AirKoreaError):
         air._call_airkorea("http://x", {})
+    assert calls["n"] == 2
 
+
+def test_call_retries_on_504(monkeypatch):
+    calls = _patch_get(monkeypatch, [_FakeResp(504), _FakeResp()])
+    assert air._call_airkorea("http://x", {}) == [{"a": 1}]
+    assert calls["n"] == 2
+
+
+def test_call_does_not_retry_on_401(monkeypatch):
+    # 인증 오류는 다시 시도해도 소용없으니 바로 중단한다
+    calls = _patch_get(monkeypatch, [_FakeResp(401), _FakeResp()])
+    with pytest.raises(air.AirKoreaError) as info:
+        air._call_airkorea("http://x", {})
+    assert calls["n"] == 1
+    assert "401" in str(info.value)
 
 # --- 지역 이름으로 조회 ---
 def test_by_name_unknown_location():
