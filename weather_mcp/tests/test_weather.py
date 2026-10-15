@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from weather_mcp.services.weather import (
     _base_datetime,
+    _forecast_base_candidates,
     _forecast_base_datetime,
     _pick_forecast_slot,
 )
@@ -35,6 +36,19 @@ def test_forecast_base_just_after_release():
 def test_forecast_base_before_release_uses_yesterday():
     # 02:05는 아직 02시 발표분이 없으므로 어제 23시 발표분
     assert _forecast_base_datetime(datetime(2026, 10, 15, 2, 5, tzinfo=KST)) == ("20261014", "2300")
+
+
+# --- 예보 발표시각 후보 (NO_DATA 재시도용) ---
+def test_forecast_candidates_latest_first():
+    # 14:33 -> 14시, 11시, 08시 발표분 순서
+    got = _forecast_base_candidates(datetime(2026, 10, 15, 14, 33, tzinfo=KST))
+    assert got == [("20261015", "1400"), ("20261015", "1100"), ("20261015", "0800")]
+
+
+def test_forecast_candidates_cross_midnight():
+    # 02:05 -> 어제 23시, 20시, 17시 발표분
+    got = _forecast_base_candidates(datetime(2026, 10, 15, 2, 5, tzinfo=KST))
+    assert got == [("20261014", "2300"), ("20261014", "2000"), ("20261014", "1700")]
 
 
 # --- 예보 슬롯 선택 ---

@@ -26,10 +26,19 @@ PTY_TEXT = {
 SKY_TEXT = {1: "맑음", 3: "구름많음", 4: "흐림"}
 # 단기예보 발표 시각(시)
 FCST_BASE_HOURS = (2, 5, 8, 11, 14, 17, 20, 23)
+# 해당 발표분의 자료가 아직 없을 때 쓰는 기상청 결과 코드 (NO_DATA)
+NO_DATA_CODE = "03"
 
 
 class KmaError(Exception):
-    """기상청 API 호출/응답 오류. 메시지에 인증키(URL)가 들어가지 않게 주의."""
+    """기상청 API 호출/응답 오류. 메시지에 인증키(URL)가 들어가지 않게 주의.
+
+    code: 기상청 resultCode (HTTP/형식 오류처럼 코드가 없으면 None)
+    """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 def _to_float(value) -> float | None:
@@ -47,16 +56,24 @@ def _base_datetime(now: datetime) -> tuple[str, str]:
     return base.strftime("%Y%m%d"), base.strftime("%H00")
 
 
-def _forecast_base_datetime(now: datetime) -> tuple[str, str]:
-    """단기예보 기준 날짜/시각: 발표 10분 후부터 조회 가능한 가장 최근 발표시각."""
+def _forecast_base_candidates(now: datetime, count: int = 3) -> list[tuple[str, str]]:
+    """단기예보 발표시각 후보를 최신 -> 이전 순서로 count개 반환한다.
+
+    발표 10분 후부터 조회 가능하다고 보고 계산한다.
+    """
     available = now - timedelta(minutes=10)
     candidates = []
     for day_offset in (0, 1):  # 오늘과 어제 후보 (02:10 이전엔 어제 23시 발표분)
         day = (available - timedelta(days=day_offset)).date()
         for hour in FCST_BASE_HOURS:
             candidates.append(datetime(day.year, day.month, day.day, hour, tzinfo=KST))
-    base = max(c for c in candidates if c <= available)
-    return base.strftime("%Y%m%d"), base.strftime("%H00")
+    valid = sorted((c for c in candidates if c <= available), reverse=True)
+    return [(c.strftime("%Y%m%d"), c.strftime("%H00")) for c in valid[:count]]
+
+
+def _forecast_base_datetime(now: datetime) -> tuple[str, str]:
+    """가장 최근 발표시각 하나만 반환한다."""
+    return _forecast_base_candidates(now, 1)[0]
 
 
 def _pick_forecast_slot(items: list[dict], now: datetime) -> tuple[str | None, dict]:
@@ -85,8 +102,9 @@ def _call_kma(url: str, params: dict) -> list[dict]:
 
     try:
         header = data["response"]["header"]
-        if header["resultCode"] != "00":  # "00"이 정상
-            raise KmaError(f"기상청 API 오류: {header['resultCode']} {header['resultMsg']}")
+        code = header["resultCode"]
+        if code != "00":  # "00"이 정상
+            raise KmaError(f"기상청 API 오류: {code} {header['resultMsg']}", code=code)
         return data["response"]["body"]["items"]["item"]
     except (KeyError, TypeError):
         raise KmaError("기상청 응답 형식이 예상과 다릅니다") from None
@@ -99,6 +117,29 @@ def _params(api_key: str, base_date: str, base_time: str, nx: int, ny: int, rows
         "dataType": "JSON", "base_date": base_date, "base_time": base_time,
         "nx": nx, "ny": ny,
     }
+
+
+def _fetch_forecast(api_key: str, nx: int, ny: int, now: datetime):
+    """단기예보를 최신 발표분부터 조회한다. 자료가 없으면(NO_DATA) 이전 발표분으로 재시도.
+
+    반환: (예보시각키, {카테고리: 값}, 사용한 발표분 "YYYYMMDD HHMM")
+    실패하면 KmaError, 모든 후보에서 해당 시각을 못 찾으면 (None, {}, None).
+    """
+    last_error: KmaError | None = None
+    for f_date, f_time in _forecast_base_candidates(now):
+        try:
+            items = _call_kma(FCST_URL, _params(api_key, f_date, f_time, nx, ny, 300))
+        except KmaError as exc:
+            last_error = exc
+            if exc.code == NO_DATA_CODE:
+                continue  # 이 발표분은 아직 없음 -> 한 단계 이전 발표분으로 재시도
+            raise  # 키 오류, 네트워크 오류 등은 재시도해도 소용없으니 중단
+        key, values = _pick_forecast_slot(items, now)
+        if key is not None:
+            return key, values, f"{f_date} {f_time}"
+    if last_error is not None:
+        raise last_error  # 모든 후보가 NO_DATA였던 경우
+    return None, {}, None
 
 
 def get_weather(location_name: str) -> dict:
@@ -144,11 +185,10 @@ def get_weather(location_name: str) -> dict:
     sky = None
     pop = None
     forecast_for = None
+    forecast_base = None
     warnings: list[str] = []
     try:
-        f_date, f_time = _forecast_base_datetime(now)
-        f_items = _call_kma(FCST_URL, _params(api_key, f_date, f_time, nx, ny, 300))
-        key, fc = _pick_forecast_slot(f_items, now)
+        key, fc, forecast_base = _fetch_forecast(api_key, nx, ny, now)
         if key is None:
             warnings.append("예보 데이터에서 해당 시각을 찾지 못했습니다")
         else:
@@ -167,6 +207,7 @@ def get_weather(location_name: str) -> dict:
         "source": "kma",
         "collected_at": now.isoformat(timespec="seconds"),
         "observed_at": f"{base_date} {base_time}",  # 실황 관측 기준 시각
+        "forecast_base": forecast_base,             # 사용한 예보 발표분
         "forecast_for": forecast_for,               # 예보값이 해당하는 시각
         "temperature_c": temperature,
         "humidity_pct": int(humidity) if humidity is not None else None,
