@@ -1,4 +1,4 @@
-"""날씨 조회 서비스 (2단계: 기상청 초단기실황 연동)."""
+"""날씨 조회 서비스 (2단계: 기상청 초단기실황 + 단기예보 연동)."""
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,13 +13,23 @@ from weather_mcp.services.location import get_location
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 KST = timezone(timedelta(hours=9))
-KMA_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
+KMA_BASE = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
+NCST_URL = f"{KMA_BASE}/getUltraSrtNcst"  # 초단기실황 (현재 관측값)
+FCST_URL = f"{KMA_BASE}/getVilageFcst"    # 단기예보 (하늘상태, 강수확률)
 
 # 강수형태(PTY) 코드 -> 한글
 PTY_TEXT = {
     0: "없음", 1: "비", 2: "비/눈", 3: "눈",
     5: "빗방울", 6: "빗방울/눈날림", 7: "눈날림",
 }
+# 하늘상태(SKY) 코드 -> 한글 (2는 없음)
+SKY_TEXT = {1: "맑음", 3: "구름많음", 4: "흐림"}
+# 단기예보 발표 시각(시)
+FCST_BASE_HOURS = (2, 5, 8, 11, 14, 17, 20, 23)
+
+
+class KmaError(Exception):
+    """기상청 API 호출/응답 오류. 메시지에 인증키(URL)가 들어가지 않게 주의."""
 
 
 def _to_float(value) -> float | None:
@@ -37,11 +47,66 @@ def _base_datetime(now: datetime) -> tuple[str, str]:
     return base.strftime("%Y%m%d"), base.strftime("%H00")
 
 
+def _forecast_base_datetime(now: datetime) -> tuple[str, str]:
+    """단기예보 기준 날짜/시각: 발표 10분 후부터 조회 가능한 가장 최근 발표시각."""
+    available = now - timedelta(minutes=10)
+    candidates = []
+    for day_offset in (0, 1):  # 오늘과 어제 후보 (02:10 이전엔 어제 23시 발표분)
+        day = (available - timedelta(days=day_offset)).date()
+        for hour in FCST_BASE_HOURS:
+            candidates.append(datetime(day.year, day.month, day.day, hour, tzinfo=KST))
+    base = max(c for c in candidates if c <= available)
+    return base.strftime("%Y%m%d"), base.strftime("%H00")
+
+
+def _pick_forecast_slot(items: list[dict], now: datetime) -> tuple[str | None, dict]:
+    """현재 시각 이후 가장 가까운 예보 시각의 (시각키, {카테고리: 값})을 반환."""
+    target = now.strftime("%Y%m%d%H00")
+    slots: dict[str, dict[str, str]] = {}
+    for it in items:
+        key = it["fcstDate"] + it["fcstTime"]  # 예: "202610151000"
+        slots.setdefault(key, {})[it["category"]] = it["fcstValue"]
+    later = [k for k in slots if k >= target]  # 문자열 비교로 시각 비교 가능
+    if not later:
+        return None, {}
+    key = min(later)
+    return key, slots[key]
+
+
+def _call_kma(url: str, params: dict) -> list[dict]:
+    """기상청 API를 호출해 item 목록을 반환한다. 실패하면 KmaError."""
+    try:
+        resp = httpx.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        # str(exc)에는 URL(인증키 포함)이 들어갈 수 있어서 클래스 이름만 노출
+        raise KmaError(f"기상청 API 호출 실패 ({type(exc).__name__})") from None
+
+    try:
+        header = data["response"]["header"]
+        if header["resultCode"] != "00":  # "00"이 정상
+            raise KmaError(f"기상청 API 오류: {header['resultCode']} {header['resultMsg']}")
+        return data["response"]["body"]["items"]["item"]
+    except (KeyError, TypeError):
+        raise KmaError("기상청 응답 형식이 예상과 다릅니다") from None
+
+
+def _params(api_key: str, base_date: str, base_time: str, nx: int, ny: int, rows: int) -> dict:
+    """기상청 API 공통 요청 파라미터."""
+    return {
+        "serviceKey": api_key, "pageNo": 1, "numOfRows": rows,
+        "dataType": "JSON", "base_date": base_date, "base_time": base_time,
+        "nx": nx, "ny": ny,
+    }
+
+
 def get_weather(location_name: str) -> dict:
     """지역 이름으로 현재 날씨를 반환한다.
 
     출처(source)와 수집 시각(collected_at)을 항상 함께 담는다.
-    실패하면 잘못된 값을 만들지 않고 {"error": ...}만 반환한다.
+    핵심 값(기온)이 없으면 {"error": ...}만 반환하고,
+    보조 값(예보)이 실패하면 None으로 두고 warnings에 이유를 남긴다.
     """
     loc = get_location(location_name)
     if loc is None:
@@ -57,48 +122,58 @@ def get_weather(location_name: str) -> dict:
         return {"error": f"좌표 변환 실패: {location_name}"}
 
     now = datetime.now(KST)
+
+    # 1) 초단기실황 (핵심): 실패하면 브리핑을 만들지 않는다
     base_date, base_time = _base_datetime(now)
-    params = {
-        "serviceKey": api_key, "pageNo": 1, "numOfRows": 10,
-        "dataType": "JSON", "base_date": base_date, "base_time": base_time,
-        "nx": nx, "ny": ny,
-    }
-
     try:
-        resp = httpx.get(KMA_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        # 주의: str(exc)에는 URL(인증키 포함)이 들어갈 수 있어서 클래스 이름만 노출
-        return {"error": f"기상청 API 호출 실패 ({type(exc).__name__})"}
-
-    try:
-        header = data["response"]["header"]
-        if header["resultCode"] != "00":  # "00"이 정상
-            return {"error": f"기상청 API 오류: {header['resultCode']} {header['resultMsg']}"}
-        items = data["response"]["body"]["items"]["item"]
+        items = _call_kma(NCST_URL, _params(api_key, base_date, base_time, nx, ny, 10))
         obs = {it["category"]: it["obsrValue"] for it in items}
+    except KmaError as exc:
+        return {"error": str(exc)}
     except (KeyError, TypeError):
         return {"error": "기상청 응답 형식이 예상과 다릅니다"}
 
     temperature = _to_float(obs.get("T1H"))
     if temperature is None:
-        # 핵심 값(기온)이 없으면 브리핑을 만들지 않는다
         return {"error": "기온 데이터를 받지 못했습니다"}
 
     humidity = _to_float(obs.get("REH"))
     pty = _to_float(obs.get("PTY"))
 
+    # 2) 단기예보 (보조): 실패해도 현재 날씨는 반환, 값은 None + warnings
+    sky = None
+    pop = None
+    forecast_for = None
+    warnings: list[str] = []
+    try:
+        f_date, f_time = _forecast_base_datetime(now)
+        f_items = _call_kma(FCST_URL, _params(api_key, f_date, f_time, nx, ny, 300))
+        key, fc = _pick_forecast_slot(f_items, now)
+        if key is None:
+            warnings.append("예보 데이터에서 해당 시각을 찾지 못했습니다")
+        else:
+            forecast_for = f"{key[:8]} {key[8:]}"
+            sky_code = _to_float(fc.get("SKY"))
+            sky = SKY_TEXT.get(int(sky_code)) if sky_code is not None else None
+            pop_val = _to_float(fc.get("POP"))
+            pop = int(pop_val) if pop_val is not None else None
+    except KmaError as exc:
+        warnings.append(f"예보 조회 실패: {exc}")
+    except (KeyError, TypeError):
+        warnings.append("예보 응답 형식이 예상과 다릅니다")
+
     return {
         "location": loc["name"],
         "source": "kma",
         "collected_at": now.isoformat(timespec="seconds"),
-        "observed_at": f"{base_date} {base_time}",  # 실제 관측 기준 시각
+        "observed_at": f"{base_date} {base_time}",  # 실황 관측 기준 시각
+        "forecast_for": forecast_for,               # 예보값이 해당하는 시각
         "temperature_c": temperature,
         "humidity_pct": int(humidity) if humidity is not None else None,
         "precipitation_mm": _to_float(obs.get("RN1")),
         "precipitation_type": PTY_TEXT.get(int(pty)) if pty is not None else None,
         "wind_speed_ms": _to_float(obs.get("WSD")),
-        "sky": None,                       # 다음 단계: 초단기예보(SKY)
-        "precipitation_probability": None,  # 다음 단계: 단기예보(POP)
+        "sky": sky,
+        "precipitation_probability": pop,
+        "warnings": warnings,
     }
