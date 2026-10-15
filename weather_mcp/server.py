@@ -1,7 +1,7 @@
 """MCP 서버 진입점. 도구 등록만 담당하고 로직은 services에 둔다."""
 from mcp.server.fastmcp import FastMCP
 
-from weather_mcp.services import location, weather
+from weather_mcp.services import air, location, weather
 
 mcp = FastMCP("weather-briefing")
 
@@ -16,6 +16,12 @@ def search_location(query: str) -> list[dict]:
 def get_weather(location_name: str) -> dict:
     """지역의 현재 날씨를 조회한다. 예: '서울 강남구'"""
     return weather.get_weather(location_name)
+
+
+@mcp.tool()
+def get_air_quality(location_name: str) -> dict:
+    """지역의 현재 미세먼지(PM10, PM2.5) 정보를 조회한다. 예: '서울 강남구'"""
+    return air.get_air_quality_by_name(location_name)
 
 
 if __name__ == "__main__":
