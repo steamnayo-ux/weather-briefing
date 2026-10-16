@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from weather_mcp.services.location import get_location
 from weather_mcp.services.tm import latlon_to_tm
+from weather_mcp.services.cache import TTLCache
 
 # weather_mcp/.env 를 경로로 직접 지정해서 읽는다 (실행 위치와 무관하게 동작)
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -26,6 +27,10 @@ RETRY_WAIT_SECONDS = 1.0  # 재시도 전 잠깐 쉰다
 
 # 등급 코드 -> 한글
 GRADE_TEXT = {1: "좋음", 2: "보통", 3: "나쁨", 4: "매우나쁨"}
+
+# 결과 캐시 (프로그램이 살아 있는 동안만 유지, 재시작하면 비워진다)
+STATION_CACHE = TTLCache(ttl_seconds=24 * 60 * 60)  # 측정소 목록: 거의 안 바뀜 (임시 TTL)
+REALTIME_CACHE = TTLCache(ttl_seconds=10 * 60)      # 측정값: 1시간 단위 갱신 (임시 TTL)
 
 
 class AirKoreaError(Exception):
@@ -104,6 +109,44 @@ def _call_airkorea(url: str, params: dict) -> list[dict]:
     except (KeyError, TypeError):
         raise AirKoreaError("에어코리아 응답 형식이 예상과 다릅니다") from None
 
+def _now_iso() -> str:
+    """현재 시각(KST)을 초 단위 문자열로 반환한다."""
+    return datetime.now(KST).isoformat(timespec="seconds")
+
+
+def _get_stations(api_key: str, tm_x: float, tm_y: float) -> list[dict]:
+    """근접측정소 목록을 반환한다. 캐시에 있으면 API를 호출하지 않는다."""
+    key = (round(tm_x, 2), round(tm_y, 2))  # 같은 좌표면 같은 목록
+    hit = STATION_CACHE.get(key)
+    if hit is not None:
+        return hit[0]  # (값, 수집 시각) 중 값만 사용
+
+    stations = _call_airkorea(NEARBY_URL, {
+        "serviceKey": api_key, "returnType": "json",
+        "tmX": round(tm_x, 2), "tmY": round(tm_y, 2),
+    })
+    if stations:  # 빈 결과는 캐시하지 않는다
+        STATION_CACHE.set(key, stations, _now_iso())
+    return stations
+
+
+def _get_realtime_rows(api_key: str, name: str) -> tuple[list[dict], str]:
+    """측정소의 실시간 측정값과 '실제 수집 시각'을 반환한다."""
+    hit = REALTIME_CACHE.get(name)
+    if hit is not None:
+        return hit  # (rows, 처음 API에서 받은 시각)
+
+    rows = _call_airkorea(REALTIME_URL, {
+        "serviceKey": api_key, "returnType": "json",
+        "stationName": name, "dataTerm": "DAILY",
+        "pageNo": 1, "numOfRows": 1, "ver": "1.3",
+    })
+    fetched_at = _now_iso()
+    if rows and _has_pm_data(rows[0]):  # 미세먼지 값이 있는 성공 결과만 캐시
+        REALTIME_CACHE.set(name, rows, fetched_at)
+    return rows, fetched_at
+
+
 def get_air_quality(lat: float, lon: float) -> dict:
     """위경도에서 가장 가까운 측정소의 미세먼지 정보를 반환한다.
 
@@ -123,10 +166,7 @@ def get_air_quality(lat: float, lon: float) -> dict:
 
     # 1) 가까운 측정소 목록 (가까운 순, 보통 3개)
     try:
-        stations = _call_airkorea(NEARBY_URL, {
-            "serviceKey": api_key, "returnType": "json",
-            "tmX": round(tm_x, 2), "tmY": round(tm_y, 2),
-        })
+                stations = _get_stations(api_key, tm_x, tm_y)
     except AirKoreaError as exc:
         return {"error": str(exc)}
     if not stations:
@@ -139,11 +179,7 @@ def get_air_quality(lat: float, lon: float) -> dict:
         if not name:
             continue
         try:
-            rows = _call_airkorea(REALTIME_URL, {
-                "serviceKey": api_key, "returnType": "json",
-                "stationName": name, "dataTerm": "DAILY",
-                "pageNo": 1, "numOfRows": 1, "ver": "1.3",
-            })
+                       rows, fetched_at = _get_realtime_rows(api_key, name)
         except AirKoreaError as exc:
             return {"error": str(exc)}  # 키/네트워크 오류는 다른 측정소를 시도해도 소용없다
 
@@ -151,7 +187,7 @@ def get_air_quality(lat: float, lon: float) -> dict:
             result = _build_result(station, rows[0])
             result.update(
                 source="airkorea",
-                collected_at=now.isoformat(timespec="seconds"),
+                collected_at=fetched_at,
                 warnings=warnings,
             )
             return result
