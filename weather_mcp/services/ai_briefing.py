@@ -6,6 +6,7 @@ AI가 데이터에 없는 숫자를 지어내면 그 문장은 사용하지 않�
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -90,25 +91,37 @@ def find_unsupported_numbers(text: str, data: dict) -> list[str]:
     return sorted({n for n in found if float(n) not in allowed})
 
 
+RETRY_CODES = {429, 500, 503, 504}  # 잠시 뒤 다시 시도하면 되는 상태 코드
+GEMINI_ATTEMPTS = 3  # 최대 시도 횟수 (처음 1번 + 재시도 2번)
+GEMINI_RETRY_WAIT = 2.0  # 재시도 전 기다리는 기본 시간(초). 시도마다 배로 늘린다
+
+
 def call_gemini(prompt: str) -> str:
-    """Gemini를 호출해 응답 문장을 반환한다. 실패하면 AiError."""
+    """Gemini를 호출해 응답 문장을 반환한다. 일시적 오류는 재시도하고, 끝내 실패하면 AiError."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise AiError("GEMINI_API_KEY가 설정되지 않았습니다 (.env 확인)")
 
     from google import genai  # 이 함수를 쓸 때만 불러온다
 
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        text = (response.text or "").strip()
-    except Exception as exc:
-        # str(exc)에는 키/URL이 들어갈 수 있어서 이름과 상태 코드만 남긴다
-        raise AiError(f"Gemini 호출 실패 ({type(exc).__name__} {getattr(exc, 'code', '')})") from None
-
-    if not text:
-        raise AiError("Gemini가 빈 응답을 반환했습니다")
-    return text
+    last_failure = "알 수 없는 오류"
+    for attempt in range(1, GEMINI_ATTEMPTS + 1):
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            text = (response.text or "").strip()
+        except Exception as exc:
+            # str(exc)에는 키/URL이 들어갈 수 있어서 이름과 상태 코드만 남긴다
+            code = getattr(exc, "code", None)
+            last_failure = "Gemini 호출 실패 (" + type(exc).__name__ + " " + str(code or "") + ")"
+            if code in RETRY_CODES and attempt < GEMINI_ATTEMPTS:
+                time.sleep(GEMINI_RETRY_WAIT * attempt)
+                continue
+            raise AiError(last_failure) from None
+        if not text:
+            raise AiError("Gemini가 빈 응답을 반환했습니다")
+        return text
+    raise AiError(last_failure)
 
 
 def generate_briefing(location_name: str, caller=None) -> dict:
