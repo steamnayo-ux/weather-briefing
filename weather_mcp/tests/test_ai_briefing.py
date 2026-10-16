@@ -75,3 +75,18 @@ def test_find_unsupported_numbers_ignores_key_names():
     # 키 이름(pm25)에 든 25 때문에 지어낸 25가 통과하면 안 된다
     data = {"air": {"pm25": 4}}
     assert ai_briefing.find_unsupported_numbers("초미세먼지 25", data) == ["25"]
+
+
+
+
+
+def test_find_unsupported_numbers_allows_hour_from_time_fields():
+    data = {"weather": {"observed_at": "20261016 1300", "forecast_for": "20261016 1500"}}
+    # 13시, 15시, 오후 3시는 시각 값에서 나온 숫자라 허용한다
+    assert ai_briefing.find_unsupported_numbers("13시 관측, 15시 예보, 오후 3시", data) == []
+
+
+def test_find_unsupported_numbers_does_not_allow_seconds():
+    data = {"weather": {"collected_at": "2026-10-16T14:07:13+09:00"}}
+    # 초(13)는 허용하지 않는다. 우연히 같아서 통과하는 것을 막는다
+    assert ai_briefing.find_unsupported_numbers("13시", data) == ["13"]
