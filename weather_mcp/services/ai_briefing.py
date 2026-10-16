@@ -91,13 +91,12 @@ def find_unsupported_numbers(text: str, data: dict) -> list[str]:
     return sorted({n for n in found if float(n) not in allowed})
 
 
-RETRY_CODES = {429, 500, 503, 504}  # 잠시 뒤 다시 시도하면 되는 상태 코드
-GEMINI_ATTEMPTS = 3  # 최대 시도 횟수 (처음 1번 + 재시도 2번)
-GEMINI_RETRY_WAIT = 2.0  # 재시도 전 기다리는 기본 시간(초). 시도마다 배로 늘린다
+GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash-lite"]  # 앞에서부터 시도
+NEXT_MODEL_CODES = {404, 429, 500, 503, 504}  # 이 모델 쪽 문제 -> 다음 모델로 넘어간다
 
 
-def call_gemini(prompt: str) -> str:
-    """Gemini를 호출해 응답 문장을 반환한다. 일시적 오류는 재시도하고, 끝내 실패하면 AiError."""
+def call_gemini(prompt: str) -> tuple[str, str]:
+    """Gemini를 호출해 (응답 문장, 실제로 쓴 모델 이름)을 반환한다. 모두 실패하면 AiError."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise AiError("GEMINI_API_KEY가 설정되지 않았습니다 (.env 확인)")
@@ -105,22 +104,21 @@ def call_gemini(prompt: str) -> str:
     from google import genai  # 이 함수를 쓸 때만 불러온다
 
     last_failure = "알 수 없는 오류"
-    for attempt in range(1, GEMINI_ATTEMPTS + 1):
+    for model in GEMINI_MODELS:
         try:
             client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            response = client.models.generate_content(model=model, contents=prompt)
             text = (response.text or "").strip()
         except Exception as exc:
             # str(exc)에는 키/URL이 들어갈 수 있어서 이름과 상태 코드만 남긴다
             code = getattr(exc, "code", None)
-            last_failure = "Gemini 호출 실패 (" + type(exc).__name__ + " " + str(code or "") + ")"
-            if code in RETRY_CODES and attempt < GEMINI_ATTEMPTS:
-                time.sleep(GEMINI_RETRY_WAIT * attempt)
+            last_failure = "Gemini 호출 실패 (" + model + ": " + type(exc).__name__ + " " + str(code or "") + ")"
+            if code in NEXT_MODEL_CODES:
                 continue
             raise AiError(last_failure) from None
-        if not text:
-            raise AiError("Gemini가 빈 응답을 반환했습니다")
-        return text
+        if text:
+            return text, model
+        last_failure = "Gemini가 빈 응답을 반환했습니다 (" + model + ")"
     raise AiError(last_failure)
 
 
@@ -133,7 +131,8 @@ def generate_briefing(location_name: str, caller=None) -> dict:
         return data  # 데이터가 없으면 AI를 호출하지 않는다
 
     try:
-        text = caller(build_prompt(data))
+        output = caller(build_prompt(data))
+        text, model = output if isinstance(output, tuple) else (output, "알 수 없음")
     except AiError as exc:
         return {"error": str(exc), "warnings": data.get("warnings", [])}
 
@@ -147,7 +146,7 @@ def generate_briefing(location_name: str, caller=None) -> dict:
     return {
         "location": data["location"],
         "briefing": text,
-        "model": GEMINI_MODEL,
+        "model": model,
         "generated_at": datetime.now(KST).isoformat(timespec="seconds"),
         "data": data,  # 근거 데이터(source, collected_at 포함)를 함께 남긴다
         "warnings": data.get("warnings", []),
