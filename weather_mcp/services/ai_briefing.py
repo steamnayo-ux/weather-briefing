@@ -39,10 +39,17 @@ class AiError(Exception):
     """AI 호출 오류. 메시지에는 키나 URL이 들어가지 않게 주의한다."""
 
 
-def build_prompt(data: dict) -> str:
-    """규칙과 데이터를 하나의 프롬프트 문자열로 만든다."""
+def build_prompt(data: dict, max_chars: int | None = None) -> str:
+    """규칙과 데이터를 하나의 프롬프트 문자열로 만든다.
+    max_chars가 있으면 길이 제한 규칙을 덧붙인다 (카카오톡 발송용)."""
     data_json = json.dumps(data, ensure_ascii=False, indent=2)
-    return f"{PROMPT_RULES}\n\n[데이터]\n{data_json}"
+    rules = PROMPT_RULES
+    if max_chars:
+        rules += (
+            f"\n- 길이 제한(위의 문장 수 규칙보다 우선): 공백 포함 {max_chars}자 이내, "
+            "2~3문장으로 쓰세요. 기온, 하늘 상태, 미세먼지 같은 핵심만 말하세요."
+        )
+    return f"{rules}\n\n[데이터]\n{data_json}"
 
 def _time_numbers(text: str) -> set[float] | None:
     """시각 문자열이면 연·월·일·시·분(12시간제 시 포함)만 반환한다. 시각이 아니면 None.
@@ -122,7 +129,7 @@ def call_gemini(prompt: str) -> tuple[str, str]:
     raise AiError(last_failure)
 
 
-def generate_briefing(location_name: str, caller=None) -> dict:
+def generate_briefing(location_name: str, caller=None, max_chars: int | None = None) -> dict:
     """지역의 날씨·대기질 브리핑 문장을 만든다. caller를 바꾸면 다른 AI를 쓸 수 있다."""
     caller = caller or call_gemini  # 호출 시점에 정해서 테스트에서 교체할 수 있게 한다
 
@@ -131,7 +138,7 @@ def generate_briefing(location_name: str, caller=None) -> dict:
         return data  # 데이터가 없으면 AI를 호출하지 않는다
 
     try:
-        output = caller(build_prompt(data))
+        output = caller(build_prompt(data, max_chars))
         text, model = output if isinstance(output, tuple) else (output, "알 수 없음")
     except AiError as exc:
         return {"error": str(exc), "warnings": data.get("warnings", [])}
