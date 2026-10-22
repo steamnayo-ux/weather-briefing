@@ -8,6 +8,7 @@ import httpx
 from dotenv import load_dotenv
 
 from weather_mcp.services.location import get_location
+from weather_mcp.services.location_resolve import LocationError
 from weather_mcp.services.tm import latlon_to_tm
 from weather_mcp.services.cache import TTLCache
 
@@ -198,7 +199,11 @@ def get_air_quality(lat: float, lon: float) -> dict:
 
 def get_air_quality_by_name(location_name: str) -> dict:
     """지역 이름으로 미세먼지 정보를 반환한다. (MCP 도구가 호출하는 함수)"""
-    loc = get_location(location_name)
+    try:
+        loc = get_location(location_name)
+    except LocationError as exc:
+        # 후보가 여러 곳이거나 지역 검색 서비스 오류: 메시지에 키/URL이 없어 그대로 전달한다
+        return {"error": str(exc)}
     if loc is None:
         return {"error": f"알 수 없는 지역: {location_name}"}
     try:

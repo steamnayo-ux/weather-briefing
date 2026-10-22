@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from weather_mcp.services.grid import latlon_to_grid
 from weather_mcp.services.location import get_location
+from weather_mcp.services.location_resolve import LocationError
 
 # weather_mcp/.env 를 경로로 직접 지정해서 읽는다 (실행 위치와 무관하게 동작)
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -149,7 +150,11 @@ def get_weather(location_name: str) -> dict:
     핵심 값(기온)이 없으면 {"error": ...}만 반환하고,
     보조 값(예보)이 실패하면 None으로 두고 warnings에 이유를 남긴다.
     """
-    loc = get_location(location_name)
+    try:
+        loc = get_location(location_name)
+    except LocationError as exc:
+        # 후보가 여러 곳이거나 지역 검색 서비스 오류: 메시지에 키/URL이 없어 그대로 전달한다
+        return {"error": str(exc)}
     if loc is None:
         return {"error": f"알 수 없는 지역: {location_name}"}
 

@@ -142,10 +142,17 @@ def test_call_does_not_retry_on_401(monkeypatch):
 
 # --- 지역 이름으로 조회 ---
 def test_by_name_unknown_location():
-    assert air.get_air_quality_by_name("없는지역") == {"error": "알 수 없는 지역: 없는지역"}
+    from unittest import mock
+
+    # 지역 조회를 가짜로 바꿔 실제 카카오 API를 호출하지 않는다
+    with mock.patch.object(air, "get_location", return_value=None):
+        assert air.get_air_quality_by_name("없는지역") == {"error": "알 수 없는 지역: 없는지역"}
 
 
 def test_by_name_adds_location(monkeypatch):
+    # 지역 확정 결과를 가짜로 주입한다 (실제 카카오 API 호출 없음)
+    monkeypatch.setattr(air, "get_location",
+                        lambda name: {"name": "서울 강남구", "lat": 37.5, "lon": 127.0})
     monkeypatch.setattr(air, "get_air_quality", lambda lat, lon: {"station_name": "A"})
     result = air.get_air_quality_by_name("서울 강남구")
     assert result["location"] == "서울 강남구"

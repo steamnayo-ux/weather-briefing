@@ -13,15 +13,27 @@ MAX_SHOWN = 5            # 오류 메시지에 보여줄 후보 최대 개수
 KEYWORD_CHECK_COUNT = 5  # 키워드 결과 중 지역 판단에 쓸 상위 개수 (뒤쪽은 잡음이 많다)
 
 
-class LocationAmbiguous(Exception):
-    """검색어가 여러 지역에 해당할 때 발생한다.
+class LocationError(Exception):
+    """지역 조회 오류의 공통 부모.
 
+    weather.py·air.py는 `except LocationError` 한 줄로 아래 두 오류를 모두 처리한다.
     메시지에는 키나 URL이 들어가지 않으므로 사용자에게 그대로 보여줘도 안전하다.
     """
+
+
+class LocationAmbiguous(LocationError):
+    """검색어가 여러 지역에 해당할 때 발생한다. (지역을 추측하지 않는다)"""
 
     def __init__(self, message: str, candidates: list[dict]):
         super().__init__(message)
         self.candidates = candidates
+
+
+class LocationLookupError(LocationError):
+    """지역 검색 서비스 호출 자체가 실패했을 때 발생한다.
+
+    '그런 지역이 없음'(None)과 구분하기 위한 오류다. (키 오류, 네트워크 오류, 서버 오류 등)
+    """
 
 
 def _to_coords(doc: dict) -> tuple[float, float] | None:
