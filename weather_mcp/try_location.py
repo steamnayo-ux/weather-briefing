@@ -9,6 +9,7 @@ from weather_mcp.services.location_resolve import LocationError
 QUERIES = [
     "분당구",
     "판교역",
+    "성남 판교역",
     "중구",
     "강남",
     "제주시",
