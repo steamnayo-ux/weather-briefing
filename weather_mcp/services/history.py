@@ -135,3 +135,30 @@ def list_recent(limit: int = 10, db_path=None) -> list[dict]:
     with closing(_connect(db_path)) as conn:
         rows = conn.execute("SELECT * FROM send_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+
+def force_claim(location: str, channel: str, db_path=None, now: datetime | None = None) -> int:
+    """수동 재발송용: 상태와 상관없이 오늘 기록을 '시도 중'으로 되돌려 발송권을 잡는다.
+
+    기록이 없으면 새로 만든다. 하루 한 줄 규칙은 그대로라서 같은 줄을 다시 쓴다.
+    """
+    moment = _kst(now)
+    record_id = add_attempt(location, channel, db_path=db_path, now=moment)
+    if record_id is not None:
+        return record_id
+
+    send_date = moment.strftime("%Y-%m-%d")
+    with closing(_connect(db_path)) as conn:
+        with conn:
+            conn.execute(
+                "UPDATE send_log SET status = 'attempting', attempted_at = ?, "
+                "finished_at = NULL, error = NULL "
+                "WHERE send_date = ? AND location = ? AND channel = ?",
+                (_text(moment), send_date, location, channel),
+            )
+        row = conn.execute(
+            "SELECT id FROM send_log WHERE send_date = ? AND location = ? AND channel = ?",
+            (send_date, location, channel),
+        ).fetchone()
+    return row["id"]
