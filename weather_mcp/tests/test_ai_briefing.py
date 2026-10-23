@@ -90,3 +90,15 @@ def test_find_unsupported_numbers_does_not_allow_seconds():
     data = {"weather": {"collected_at": "2026-10-16T14:07:13+09:00"}}
     # 초(13)는 허용하지 않는다. 우연히 같아서 통과하는 것을 막는다
     assert ai_briefing.find_unsupported_numbers("13시", data) == ["13"]
+
+
+def test_kakao_prompt_requires_values_and_hides_process():
+    prompt = ai_briefing.build_prompt({"location": "분당구"}, max_chars=150)
+    assert "150자" in prompt
+    assert "PM10" in prompt and "㎍/㎥" in prompt
+    assert "처리 과정" in prompt   # 측정소 대체 같은 내부 과정을 말하지 않게 한다
+
+
+def test_default_prompt_has_no_kakao_rules():
+    prompt = ai_briefing.build_prompt({"location": "분당구"})
+    assert "㎍/㎥" not in prompt
