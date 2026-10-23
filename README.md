@@ -1,3 +1,5 @@
+![tests](https://github.com/steamnayo-ux/weather-briefing/actions/workflows/test.yml/badge.svg)
+
 # weather-briefing
 
 날씨/대기질 AI 브리핑 MCP 프로젝트
