@@ -1,7 +1,8 @@
-"""카카오톡 '나에게 보내기' 서비스 (4-3).
+"""카카오톡 '나에게 보내기' 서비스 (4-3, 5-4).
 
-- 토큰 파일 읽기/저장
+- 토큰 파일 읽기/저장 (임시 파일에 쓴 뒤 바꿔치기해서 도중에 끊겨도 기존 파일이 남는다)
 - access 토큰 만료 임박 시 refresh 토큰으로 갱신
+- refresh 토큰의 발급 시각·수명을 따로 기록해 만료 일정을 알 수 있게 한다
 - 텍스트 메시지 발송 (401이면 갱신 후 1회만 재시도)
 
 오류 메시지에는 키·토큰·URL을 넣지 않는다.
@@ -22,12 +23,17 @@ TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 DEFAULT_LINK = "https://www.weather.go.kr"
 REFRESH_MARGIN_SEC = 300  # 만료 5분 전부터는 미리 갱신
+REFRESH_TTL_DEFAULT_SEC = 5183999  # refresh 토큰 수명(약 60일). 토큰 파일에 값이 없을 때만 쓴다
 MAX_TEXT_LEN = 200  # 텍스트 템플릿 글자 수 제한 (콘솔 문서에서 한 번 확인 권장)
 TIMEOUT_SEC = 10
 
 
 class KakaoError(Exception):
     """카카오 연동 오류. 메시지에 키·토큰·URL이 들어가지 않게 한다."""
+
+
+class KakaoReauthRequired(KakaoError):
+    """refresh 토큰이 만료돼 인가 코드로 다시 발급해야 하는 경우."""
 
 
 def _json(resp) -> dict:
@@ -50,10 +56,14 @@ def load_tokens() -> dict:
 
 
 def save_tokens(tokens: dict) -> None:
-    """토큰을 파일에 저장한다."""
-    TOKEN_FILE.write_text(
-        json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    """토큰을 파일에 저장한다.
+
+    임시 파일에 먼저 쓰고 바꿔치기한다. 새 refresh 토큰이 나오면 기존 것은 폐기되므로,
+    쓰다가 끊겨 파일이 깨지면 다시 인증해야 한다. 그 사고를 막기 위한 방식이다.
+    """
+    tmp = TOKEN_FILE.with_name(TOKEN_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, TOKEN_FILE)
 
 
 def is_expiring(tokens: dict, now: float | None = None) -> bool:
@@ -61,6 +71,24 @@ def is_expiring(tokens: dict, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     expires_at = tokens.get("obtained_at", 0) + tokens.get("expires_in", 0)
     return now >= expires_at - REFRESH_MARGIN_SEC
+
+
+def refresh_expires_at(tokens: dict) -> float | None:
+    """refresh 토큰이 만료되는 시각(epoch 초). 발급 시각을 모르면 None."""
+    issued = tokens.get("refresh_token_obtained_at")
+    if not issued:
+        return None
+    ttl = tokens.get("refresh_token_expires_in") or REFRESH_TTL_DEFAULT_SEC
+    return issued + ttl
+
+
+def refresh_days_left(tokens: dict, now: float | None = None) -> float | None:
+    """refresh 토큰이 만료되기까지 남은 날수. 발급 시각을 모르면 None."""
+    expires_at = refresh_expires_at(tokens)
+    if expires_at is None:
+        return None
+    now = time.time() if now is None else now
+    return (expires_at - now) / 86400
 
 
 def refresh_tokens(tokens: dict) -> dict:
@@ -89,15 +117,22 @@ def refresh_tokens(tokens: dict) -> dict:
     body = _json(resp)
     if resp.status_code != 200 or "access_token" not in body:
         code = body.get("error_code") or body.get("error")
+        if code == "KOE322":  # 만료됐거나 폐기된 refresh 토큰
+            raise KakaoReauthRequired(
+                "refresh 토큰이 만료되었습니다. try_kakao_auth.py로 다시 발급하세요."
+            )
         raise KakaoError(f"토큰 갱신 실패: {resp.status_code} {code}")
 
     new_tokens = dict(tokens)
     new_tokens["access_token"] = body["access_token"]
     new_tokens["expires_in"] = body.get("expires_in", 0)
     new_tokens["obtained_at"] = int(time.time())
-    # 새 refresh 토큰은 응답에 있을 때만 교체 (없으면 기존 값 유지)
+    # 새 refresh 토큰은 응답에 있을 때만 교체 (없으면 기존 값과 발급 시각 유지)
     if body.get("refresh_token"):
         new_tokens["refresh_token"] = body["refresh_token"]
+        new_tokens["refresh_token_obtained_at"] = new_tokens["obtained_at"]
+        if body.get("refresh_token_expires_in"):
+            new_tokens["refresh_token_expires_in"] = body["refresh_token_expires_in"]
     return new_tokens
 
 

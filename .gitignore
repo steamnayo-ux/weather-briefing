@@ -2,7 +2,7 @@
 __pycache__/
 .pytest_cache/
 .env
-kakao_tokens.json
+kakao_tokens.json*
 
 # SQLite (발송 이력 DB와 부속 파일: -journal, -wal, -shm)
 data/*.db*
