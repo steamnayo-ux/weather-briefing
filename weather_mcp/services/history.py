@@ -8,6 +8,8 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from contextlib import closing, contextmanager   # contextmanager 추가
+from weather_mcp.services.store import StoreError
 
 KST = timezone(timedelta(hours=9))
 # 프로젝트 루트의 data 폴더 (.gitignore의 data/*.db* 대상)
@@ -162,3 +164,42 @@ def force_claim(location: str, channel: str, db_path=None, now: datetime | None 
             (send_date, location, channel),
         ).fetchone()
     return row["id"]
+
+@contextmanager
+def _as_store_error(action: str):
+    """sqlite3 오류를 StoreError로 바꾼다. 위쪽이 SQLite를 몰라도 되게 하기 위해서다."""
+    try:
+        yield
+    except sqlite3.Error as exc:
+        raise StoreError(f"{action} 실패: {type(exc).__name__}") from None
+
+
+class SqliteHistoryStore:
+    """HistoryStore의 SQLite 구현. 위의 함수를 감쌀 뿐, 로직은 복사하지 않는다.
+
+    메서드 안의 claim_send 등은 클래스 메서드가 아니라 모듈의 함수를 가리킨다.
+    (테스트에서 history.claim_send를 바꿔도 그대로 따라온다)
+    """
+
+    def __init__(self, db_path=None):
+        self.db_path = db_path  # db_path는 이제 SQLite 구현 안에만 있다
+
+    def claim_send(self, location, channel, now=None):
+        with _as_store_error("발송권 확인"):
+            return claim_send(location, channel, db_path=self.db_path, now=now)
+
+    def finish_attempt(self, record_id, status, error=None, now=None):
+        with _as_store_error("발송 이력 기록"):
+            finish_attempt(record_id, status, error=error, db_path=self.db_path, now=now)
+
+    def force_claim(self, location, channel, now=None):
+        with _as_store_error("강제 발송권"):
+            return force_claim(location, channel, db_path=self.db_path, now=now)
+
+    def get_record(self, send_date, location, channel):
+        with _as_store_error("이력 조회"):
+            return get_record(send_date, location, channel, db_path=self.db_path)
+
+    def list_recent(self, limit=10):
+        with _as_store_error("최근 이력 조회"):
+            return list_recent(limit, db_path=self.db_path)

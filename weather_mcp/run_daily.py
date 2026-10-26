@@ -1,20 +1,24 @@
-"""매일 브리핑 발송 진입점 (5-3).
+"""매일 브리핑 발송 진입점 (5-3, 6-1).
 
 실행:  python -m weather_mcp.run_daily
 옵션:  --location 지역   (없으면 .env의 DAILY_LOCATION)
        --dry-run         브리핑 문장만 보여 주고 발송·기록은 하지 않는다
        --force           오늘 이미 보냈어도 다시 보낸다 (수동 재발송)
 종료 코드: 0 성공 또는 건너뜀, 1 발송 실패, 2 지역 설정 없음
+
+6-1: 저장 방식(발송 이력·토큰)은 store / token_store로 바꿔 끼울 수 있다.
+     안 넘기면 지금과 같은 SQLite와 토큰 파일을 쓴다.
 """
 import argparse
+import functools
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from weather_mcp.services import ai_briefing, history, kakao_briefing
+from weather_mcp.services import ai_briefing, history, kakao, kakao_briefing
+from weather_mcp.services.store import StoreError
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -41,12 +45,13 @@ def resolve_location(cli_value):
     return value or None
 
 
-def _record(record_id, status, error, db_path, now):
+def _record(record_id, status, error, store, now):
     """결과를 기록한다. 기록이 실패해도 발송 결과 자체는 바꾸지 않는다."""
     try:
-        history.finish_attempt(record_id, status, error=error, db_path=db_path, now=now)
-    except sqlite3.Error as exc:
-        print(f"주의: 발송 이력을 기록하지 못했습니다 ({type(exc).__name__})")
+        store.finish_attempt(record_id, status, error=error, now=now)
+    except StoreError as exc:
+        # StoreError 메시지에는 어떤 작업이 왜 실패했는지(오류 이름)만 들어 있다
+        print(f"주의: 발송 이력을 기록하지 못했습니다 ({exc})")
 
 
 def _dry_run(location, generate):
@@ -64,8 +69,14 @@ def _dry_run(location, generate):
     return EXIT_OK
 
 
-def main(argv=None, send=None, generate=None, db_path=None, now=None) -> int:
-    """send/generate/db_path/now는 테스트에서 교체한다. 종료 코드를 반환한다."""
+def main(argv=None, send=None, generate=None, db_path=None, now=None,
+         store=None, token_store=None) -> int:
+    """종료 코드를 반환한다.
+
+    send/generate/db_path/now는 테스트에서 교체한다.
+    store: 발송 이력 저장소 (없으면 SQLite, db_path는 이때만 쓴다)
+    token_store: 카카오 토큰 저장소 (없으면 토큰 파일)
+    """
     args = parse_args(argv)
     location = resolve_location(args.location)
     if not location:
@@ -75,11 +86,16 @@ def main(argv=None, send=None, generate=None, db_path=None, now=None) -> int:
     if args.dry_run:
         return _dry_run(location, generate)
 
+    # 저장소 정하기: 안 넘기면 지금과 똑같이 동작한다
+    store = store or history.SqliteHistoryStore(db_path)
+    if send is None and token_store is not None:
+        send = functools.partial(kakao.send_text_to_me, store=token_store)
+
     # 발송권 잡기: 못 잡으면 보내지 않는다 (건너뜀은 실패가 아니다)
     if args.force:
-        record_id = history.force_claim(location, CHANNEL, db_path=db_path, now=now)
+        record_id = store.force_claim(location, CHANNEL, now=now)
     else:
-        record_id, reason = history.claim_send(location, CHANNEL, db_path=db_path, now=now)
+        record_id, reason = store.claim_send(location, CHANNEL, now=now)
         if record_id is None:
             print(f"발송하지 않음: {SKIP_TEXT.get(reason, reason)} ({location})")
             return EXIT_OK
@@ -90,12 +106,12 @@ def main(argv=None, send=None, generate=None, db_path=None, now=None) -> int:
         result = {"sent": False, "error": f"실행 중 예상치 못한 오류 ({type(exc).__name__})"}
 
     if result.get("sent"):
-        _record(record_id, "sent", None, db_path, now)
+        _record(record_id, "sent", None, store, now)
         print(f"발송 완료: {location}")
         return EXIT_OK
 
     error = result.get("error") or "알 수 없는 오류"
-    _record(record_id, "failed", error, db_path, now)
+    _record(record_id, "failed", error, store, now)
     print(f"발송 실패: {error}")
     return EXIT_FAILED
 

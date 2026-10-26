@@ -1,9 +1,10 @@
-"""카카오톡 '나에게 보내기' 서비스 (4-3, 5-4).
+"""카카오톡 '나에게 보내기' 서비스 (4-3, 5-4, 6-1).
 
 - 토큰 파일 읽기/저장 (임시 파일에 쓴 뒤 바꿔치기해서 도중에 끊겨도 기존 파일이 남는다)
 - access 토큰 만료 임박 시 refresh 토큰으로 갱신
 - refresh 토큰의 발급 시각·수명을 따로 기록해 만료 일정을 알 수 있게 한다
 - 텍스트 메시지 발송 (401이면 갱신 후 1회만 재시도)
+- 6-1: 토큰 저장 방식을 TokenStore로 바꿔 끼울 수 있다 (기본은 지금과 같은 파일)
 
 오류 메시지에는 키·토큰·URL을 넣지 않는다.
 """
@@ -14,6 +15,8 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
+
+from weather_mcp.services.store import TokenStore
 
 load_dotenv()
 
@@ -64,6 +67,20 @@ def save_tokens(tokens: dict) -> None:
     tmp = TOKEN_FILE.with_name(TOKEN_FILE.name + ".tmp")
     tmp.write_text(json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, TOKEN_FILE)
+
+
+class FileTokenStore:
+    """TokenStore의 파일 구현 (6-1). 위의 load_tokens/save_tokens를 그대로 쓴다.
+
+    로직을 복사하지 않고 모듈 함수를 부르기 때문에,
+    테스트에서 TOKEN_FILE을 바꾸면 이쪽도 같이 따라온다.
+    """
+
+    def load(self) -> dict:
+        return load_tokens()  # 없거나 깨졌으면 KakaoError (기존 동작 유지)
+
+    def save(self, tokens: dict) -> None:
+        save_tokens(tokens)  # 임시 파일 → os.replace (기존 동작 유지)
 
 
 def is_expiring(tokens: dict, now: float | None = None) -> bool:
@@ -155,10 +172,11 @@ def _post_message(access_token: str, text: str):
         raise KakaoError(f"발송 요청 실패: {type(exc).__name__}") from None
 
 
-def send_text_to_me(text: str) -> dict:
+def send_text_to_me(text: str, store: TokenStore | None = None) -> dict:
     """나와의 채팅에 텍스트를 보낸다.
 
     1) 만료 임박이면 먼저 갱신  2) 401이면 갱신 후 딱 1번만 재시도
+    store: 토큰을 읽고 저장하는 곳. 안 넘기면 지금과 똑같이 토큰 파일을 쓴다.
     """
     if not text or not text.strip():
         raise KakaoError("보낼 문장이 비어 있습니다.")
@@ -166,15 +184,16 @@ def send_text_to_me(text: str) -> dict:
     if len(text) > MAX_TEXT_LEN:
         raise KakaoError(f"문장이 너무 깁니다 ({len(text)}자 / 최대 {MAX_TEXT_LEN}자).")
 
-    tokens = load_tokens()
+    store = store or FileTokenStore()
+    tokens = store.load()
     if is_expiring(tokens):
         tokens = refresh_tokens(tokens)
-        save_tokens(tokens)
+        store.save(tokens)
 
     resp = _post_message(tokens["access_token"], text)
     if resp.status_code == 401:  # access 토큰이 이미 만료된 경우
         tokens = refresh_tokens(tokens)
-        save_tokens(tokens)
+        store.save(tokens)
         resp = _post_message(tokens["access_token"], text)
 
     body = _json(resp)
