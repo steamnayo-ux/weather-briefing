@@ -74,6 +74,8 @@ def main() -> None:
 
     # 3) 파일에 저장 (갱신 로직용 발급 시각 포함). 토큰 값은 출력하지 않는다.
     body["obtained_at"] = int(time.time())
+    # 재인증 경고가 refresh 만료까지 남은 일수를 계산하는 기준
+    body["refresh_token_obtained_at"] = body["obtained_at"]
     TOKEN_FILE.write_text(json.dumps(body, ensure_ascii=False, indent=2),
                           encoding="utf-8")
     print("성공! 저장 위치:", TOKEN_FILE.name)
