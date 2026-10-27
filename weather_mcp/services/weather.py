@@ -143,12 +143,47 @@ def _fetch_forecast(api_key: str, nx: int, ny: int, now: datetime):
     return None, {}, None
 
 
+DAILY_ROWS = 500  # 02시 발표분의 오늘 하루치(약 250개)가 모두 들어오는 크기
+
+
+def _day_base(now: datetime) -> tuple[str, str]:
+    """하루 전체(일최저·일최고 포함)를 담은 발표분: 오늘 02시, 아직 조회 불가면 어제 23시."""
+    available = now - timedelta(minutes=10)  # 발표 10분 후부터 조회 가능
+    base = available.replace(hour=2, minute=0, second=0, microsecond=0)
+    if base > available:
+        base = (available - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
+    return base.strftime("%Y%m%d"), base.strftime("%H00")
+
+
+def _summarize_day(items: list[dict], date: str) -> dict:
+    """예보 item 목록에서 date(YYYYMMDD) 하루의 최저·최고기온과 최대 강수확률을 뽑는다.
+
+    일최저(TMN)·일최고(TMX)가 있으면 그것을, 없으면 시간별 기온(TMP)의 최소·최대를 쓴다.
+    값이 없으면 None.
+    """
+    values: dict[str, list[float]] = {"TMN": [], "TMX": [], "TMP": [], "POP": []}
+    for it in items:
+        if it.get("fcstDate") != date:
+            continue
+        bucket = values.get(it.get("category"))
+        number = _to_float(it.get("fcstValue"))
+        if bucket is not None and number is not None:
+            bucket.append(number)
+    lows = values["TMN"] or values["TMP"]
+    highs = values["TMX"] or values["TMP"]
+    return {
+        "temp_min_c": min(lows) if lows else None,
+        "temp_max_c": max(highs) if highs else None,
+        "precipitation_probability_max": int(max(values["POP"])) if values["POP"] else None,
+    }
+
+
 def get_weather(location_name: str) -> dict:
-    """지역 이름으로 현재 날씨를 반환한다.
+    """지역 이름으로 현재 날씨와 오늘 하루 요약(최저·최고기온, 최대 강수확률)을 반환한다.
 
     출처(source)와 수집 시각(collected_at)을 항상 함께 담는다.
     핵심 값(기온)이 없으면 {"error": ...}만 반환하고,
-    보조 값(예보)이 실패하면 None으로 두고 warnings에 이유를 남긴다.
+    보조 값(예보, 하루 요약)이 실패하면 None으로 두고 warnings에 이유를 남긴다.
     """
     try:
         loc = get_location(location_name)
@@ -207,6 +242,17 @@ def get_weather(location_name: str) -> dict:
     except (KeyError, TypeError):
         warnings.append("예보 응답 형식이 예상과 다릅니다")
 
+    # 3) 오늘 하루 요약 (보조): 02시 발표분에는 오늘 하루 전체와 일최저·일최고가 들어 있다
+    daily = {"temp_min_c": None, "temp_max_c": None, "precipitation_probability_max": None}
+    try:
+        day_date, day_time = _day_base(now)
+        day_items = _call_kma(FCST_URL, _params(api_key, day_date, day_time, nx, ny, DAILY_ROWS))
+        daily = _summarize_day(day_items, now.strftime("%Y%m%d"))
+    except KmaError as exc:
+        warnings.append(f"하루 요약 조회 실패: {exc}")
+    except (KeyError, TypeError):
+        warnings.append("하루 요약 응답 형식이 예상과 다릅니다")
+
     return {
         "location": loc["name"],
         "source": "kma",
@@ -221,5 +267,8 @@ def get_weather(location_name: str) -> dict:
         "wind_speed_ms": _to_float(obs.get("WSD")),
         "sky": sky,
         "precipitation_probability": pop,
+        "temp_min_c": daily["temp_min_c"],                                   # 오늘 최저
+        "temp_max_c": daily["temp_max_c"],                                   # 오늘 최고
+        "precipitation_probability_max": daily["precipitation_probability_max"],  # 오늘 최대
         "warnings": warnings,
     }
