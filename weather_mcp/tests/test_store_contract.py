@@ -7,13 +7,11 @@
 """
 import time
 from datetime import datetime, timedelta, timezone
-
 import pytest
-
 import os
 import uuid
-
 import psycopg
+import threading
 
 from weather_mcp import run_daily
 from weather_mcp.services import history, kakao
@@ -149,6 +147,31 @@ def test_list_recent_is_newest_first_and_limited(store):
         store.claim_send(LOC, CH, now=T0 + timedelta(days=day))
     rows = store.list_recent(limit=2)
     assert [r["send_date"] for r in rows] == ["2026-10-28", "2026-10-27"]
+
+def test_concurrent_claim_only_one_wins(store):
+    """5개 실행이 같은 순간 발송권을 잡으면 정확히 1개만 'new'여야 한다."""
+    if isinstance(store, history.SqliteHistoryStore):
+        pytest.skip("동시 실행 검증은 외부 DB 전용")
+
+    store.get_record("2026-10-26", LOC, CH)  # 표를 미리 만들어 둔다 (동시에 만들다 충돌하는 것 방지)
+
+    n = 5
+    barrier = threading.Barrier(n)  # 5개가 모두 도착할 때까지 기다렸다가 동시에 출발
+    results = []
+
+    def worker():
+        barrier.wait()
+        results.append(store.claim_send(LOC, CH, now=T0))
+
+    threads = [threading.Thread(target=worker) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(results) == n  # 스레드가 중간에 죽지 않았는지
+    reasons = sorted(reason for _, reason in results)
+    assert reasons == ["in_progress"] * (n - 1) + ["new"]  # 한 쪽만 성공   
 
 
 # ---------------------------------------------------------------
