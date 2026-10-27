@@ -1,7 +1,7 @@
 """MCP 서버 진입점. 도구 등록만 담당하고 로직은 services에 둔다."""
 from mcp.server.fastmcp import FastMCP
 
-from weather_mcp.services import ai_briefing, air, kakao_briefing, location, weather
+from weather_mcp.services import activity, ai_briefing, air, kakao_briefing, location, weather
 
 mcp = FastMCP("weather-briefing")
 
@@ -29,6 +29,20 @@ def get_hourly_forecast(
     wind_chill_c는 겨울 바람 체감온도(℃)이며, 기온 10℃ 이하이고 풍속 1.3m/s 이상일 때만 값이 있고 아니면 null이다.
     예: 퇴근길 비 여부는 start_hour=17, end_hour=19, 내일 오전은 date='내일', start_hour=6, end_hour=12"""
     return weather.get_hourly_forecast(location_name, date, start_hour, end_hour)
+
+
+@mcp.tool()
+def recommend_activity(
+    location_name: str, activity_name: str, date: str = "오늘",
+    start_hour: int | None = None, end_hour: int | None = None
+) -> dict:
+    """활동을 해도 좋은지 시간대별 예보와 미세먼지 규칙으로 판단한다.
+    activity_name은 '러닝', '산책', '외출'(퇴근길·우산), '빨래' 중 하나다.
+    date는 '오늘', '내일', '모레' 또는 'YYYY-MM-DD'이고, start_hour~end_hour(0~23시)를 생략하면 활동별 기본 시간대를 쓴다.
+    verdict(좋음/주의/비추천/판단불가)와 reasons는 코드 규칙의 결과이므로 바꾸지 말고 그대로 설명하고,
+    items(준비물)와 notes(확인하지 못한 항목)도 함께 알려 준다. 숫자는 details에 있다.
+    예: '퇴근길 비 와?' -> activity_name='외출', start_hour=17, end_hour=19"""
+    return activity.recommend_activity(location_name, activity_name, date, start_hour, end_hour)
 
 
 @mcp.tool()
