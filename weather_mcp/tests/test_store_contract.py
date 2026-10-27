@@ -10,6 +10,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import os
+import uuid
+
+import psycopg
+
 from weather_mcp import run_daily
 from weather_mcp.services import history, kakao
 from weather_mcp.services.store import StoreError
@@ -23,9 +28,24 @@ CH = "kakao"
 # ---------------------------------------------------------------
 # 1부: HistoryStore 계약
 # ---------------------------------------------------------------
-@pytest.fixture(params=["sqlite"])  # 6-3에서 "external"을 여기에 추가한다
+@pytest.fixture(params=["sqlite", "external"])
 def store(request, tmp_path):
-    return history.SqliteHistoryStore(tmp_path / "contract.db")
+    if request.param == "sqlite":
+        yield history.SqliteHistoryStore(tmp_path / "contract.db")
+        return
+
+    # 외부 DB: DATABASE_URL이 없으면 건너뛴다 (GitHub Actions 같은 환경에서 테스트가 깨지지 않게)
+    from weather_mcp.services.pg_history_store import PostgresHistoryStore  # .env도 여기서 읽힌다
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        pytest.skip("DATABASE_URL이 없어 외부 DB 테스트를 건너뜁니다")
+
+    schema = f"test_{uuid.uuid4().hex[:12]}"  # 테스트마다 새 임시 공간
+    yield PostgresHistoryStore(url, schema=schema)
+
+    # 끝나면 임시 공간을 통째로 지운다 (진짜 send_log는 건드리지 않는다)
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
 
 
 def test_first_claim_is_new(store):
