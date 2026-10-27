@@ -19,6 +19,18 @@ def get_weather(location_name: str) -> dict:
 
 
 @mcp.tool()
+def get_hourly_forecast(
+    location_name: str, date: str = "오늘", start_hour: int = 0, end_hour: int = 23
+) -> dict:
+    """지역의 시간대별 예보(기온, 강수확률, 강수 형태, 하늘 상태, 습도, 풍속)를 조회한다.
+    date는 '오늘', '내일', '모레' 또는 'YYYY-MM-DD' (오늘~모레까지만 가능).
+    start_hour~end_hour는 0~23시이며 양쪽 시각을 포함한다.
+    summary에 최대 강수확률과 비·눈이 오는 시각 목록이 들어 있다.
+    예: 퇴근길 비 여부는 start_hour=17, end_hour=19, 내일 오전은 date='내일', start_hour=6, end_hour=12"""
+    return weather.get_hourly_forecast(location_name, date, start_hour, end_hour)
+
+
+@mcp.tool()
 def get_air_quality(location_name: str) -> dict:
     """지역의 현재 미세먼지(PM10, PM2.5) 정보를 조회한다. 예: '서울 강남구'"""
     return air.get_air_quality_by_name(location_name)

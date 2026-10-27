@@ -272,3 +272,152 @@ def get_weather(location_name: str) -> dict:
         "precipitation_probability_max": daily["precipitation_probability_max"],  # 오늘 최대
         "warnings": warnings,
     }
+
+
+
+# ---------------------------------------------------------------------------
+# 시간대별 예보 (get_hourly_forecast)
+# ---------------------------------------------------------------------------
+HOURLY_ROWS = 1000  # 오늘~모레(약 3일 x 24시간 x 12개 항목)가 모두 들어오는 크기
+MAX_DAYS_AHEAD = 2  # 단기예보는 오늘~모레까지만 제공한다
+DAY_WORDS = {"오늘": 0, "내일": 1, "모레": 2}
+# 단기예보의 강수형태(PTY)에는 4(소나기)가 있다. 초단기실황용 PTY_TEXT와 달라 따로 둔다
+FCST_PTY_TEXT = {0: "없음", 1: "비", 2: "비/눈", 3: "눈", 4: "소나기"}
+
+
+def _resolve_forecast_date(date: str | None, now: datetime):
+    """'오늘'·'내일'·'모레' 또는 'YYYY-MM-DD'/'YYYYMMDD'를 날짜로 바꾼다. 해석 불가면 None."""
+    text = (date or "오늘").strip()
+    if text in DAY_WORDS:
+        return (now + timedelta(days=DAY_WORDS[text])).date()
+    try:
+        return datetime.strptime(text.replace("-", ""), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def _fetch_forecast_items(api_key: str, nx: int, ny: int, now: datetime, rows: int):
+    """단기예보 item 전체를 최신 발표분부터 조회한다. 자료가 없으면(NO_DATA) 이전 발표분으로 재시도.
+
+    반환: (item 목록, 사용한 발표분 "YYYYMMDD HHMM")
+    키 오류·네트워크 오류는 재시도하지 않고 KmaError를 그대로 올린다.
+    """
+    last_error: KmaError | None = None
+    for f_date, f_time in _forecast_base_candidates(now):
+        try:
+            items = _call_kma(FCST_URL, _params(api_key, f_date, f_time, nx, ny, rows))
+        except KmaError as exc:
+            last_error = exc
+            if exc.code == NO_DATA_CODE:
+                continue  # 이 발표분은 아직 없음 -> 한 단계 이전 발표분으로
+            raise
+        return items, f"{f_date} {f_time}"
+    raise last_error  # 모든 후보가 NO_DATA였던 경우 (후보는 항상 1개 이상)
+
+
+def _build_hourly(items: list[dict], date: str, start_hour: int, end_hour: int) -> list[dict]:
+    """item 목록에서 date(YYYYMMDD)의 start_hour~end_hour(포함) 시간별 예보를 만든다."""
+    slots: dict[str, dict[str, str]] = {}
+    for it in items:
+        if it.get("fcstDate") != date:
+            continue
+        slots.setdefault(it["fcstTime"], {})[it["category"]] = it["fcstValue"]
+
+    hours = []
+    for time in sorted(slots):  # "0900" < "1800" 문자열 순서가 곧 시간 순서
+        if not start_hour <= int(time[:2]) <= end_hour:
+            continue
+        v = slots[time]
+        sky = _to_float(v.get("SKY"))
+        pty = _to_float(v.get("PTY"))
+        pop = _to_float(v.get("POP"))
+        humidity = _to_float(v.get("REH"))
+        hours.append({
+            "time": f"{time[:2]}:{time[2:]}",
+            "temperature_c": _to_float(v.get("TMP")),
+            "sky": SKY_TEXT.get(int(sky)) if sky is not None else None,
+            "precipitation_type": (
+                FCST_PTY_TEXT.get(int(pty), f"알 수 없음({int(pty)})") if pty is not None else None
+            ),
+            "precipitation_probability": int(pop) if pop is not None else None,
+            "precipitation_amount": v.get("PCP"),  # "강수없음", "1.0mm" 등 기상청 문자열 그대로
+            "snow_amount": v.get("SNO"),           # "적설없음", "1.0cm" 등 기상청 문자열 그대로
+            "humidity_pct": int(humidity) if humidity is not None else None,
+            "wind_speed_ms": _to_float(v.get("WSD")),
+        })
+    return hours
+
+
+def _summarize_hours(hours: list[dict]) -> dict:
+    """시간별 예보 목록에서 최저·최고기온, 최대 강수확률, 비·눈 오는 시각을 뽑는다."""
+    temps = [h["temperature_c"] for h in hours if h["temperature_c"] is not None]
+    pops = [h["precipitation_probability"] for h in hours if h["precipitation_probability"] is not None]
+    # 강수형태가 '없음'이 아니면(알 수 없는 코드 포함) 내리는 시각으로 본다
+    wet = [h["time"] for h in hours if h["precipitation_type"] not in (None, "없음")]
+    return {
+        "temp_min_c": min(temps) if temps else None,
+        "temp_max_c": max(temps) if temps else None,
+        "precipitation_probability_max": max(pops) if pops else None,
+        "precipitation_times": wet,
+    }
+
+
+def get_hourly_forecast(
+    location_name: str, date: str = "오늘", start_hour: int = 0, end_hour: int = 23
+) -> dict:
+    """지역의 시간대별 예보를 반환한다 (오늘~모레, start_hour~end_hour 시 포함).
+
+    이미 지난 시각은 예보에 없으므로 빈 목록과 warnings로 알린다.
+    실패하면 {"error": ...}만 반환한다.
+    """
+    now = datetime.now(KST)
+
+    # 입력 검사 (네트워크를 쓰기 전에 먼저 거른다)
+    target = _resolve_forecast_date(date, now)
+    if target is None:
+        return {"error": f"날짜를 이해하지 못했습니다: {date} ('오늘', '내일', '모레' 또는 YYYY-MM-DD)"}
+    if not 0 <= (target - now.date()).days <= MAX_DAYS_AHEAD:
+        return {"error": "단기예보는 오늘부터 모레까지만 조회할 수 있습니다"}
+    if not 0 <= start_hour <= end_hour <= 23:
+        return {"error": "시간 범위가 올바르지 않습니다 (0~23시, 시작 시각은 끝 시각 이하)"}
+
+    try:
+        loc = get_location(location_name)
+    except LocationError as exc:
+        return {"error": str(exc)}
+    if loc is None:
+        return {"error": f"알 수 없는 지역: {location_name}"}
+
+    api_key = os.getenv("DATA_GO_KR_API_KEY")
+    if not api_key:
+        return {"error": "API 키가 설정되지 않았습니다 (.env 확인)"}
+
+    try:
+        nx, ny = latlon_to_grid(loc["lat"], loc["lon"])
+    except (KeyError, ValueError):
+        return {"error": f"좌표 변환 실패: {location_name}"}
+
+    try:
+        items, forecast_base = _fetch_forecast_items(api_key, nx, ny, now, HOURLY_ROWS)
+    except KmaError as exc:
+        return {"error": str(exc)}
+    except (KeyError, TypeError):
+        return {"error": "기상청 응답 형식이 예상과 다릅니다"}
+
+    hours = _build_hourly(items, target.strftime("%Y%m%d"), start_hour, end_hour)
+    warnings: list[str] = []
+    if not hours:
+        warnings.append("해당 날짜·시간대의 예보가 없습니다 (이미 지난 시각이거나 발표분 범위 밖일 수 있습니다)")
+
+    return {
+        "location": loc["name"],
+        "source": "kma",
+        "collected_at": now.isoformat(timespec="seconds"),
+        "forecast_base": forecast_base,  # 사용한 예보 발표분
+        "date": target.isoformat(),
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+        "summary": _summarize_hours(hours),
+        "hours": hours,
+        "warnings": warnings,
+    }
