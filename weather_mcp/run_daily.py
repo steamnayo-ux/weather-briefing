@@ -28,6 +28,36 @@ SKIP_TEXT = {
     "already_sent": "오늘은 이미 발송했습니다",
     "in_progress": "다른 실행이 발송 중입니다",
 }
+REAUTH_CHANNEL = "kakao-reauth"  # claim_send를 다른 채널 이름으로 재사용 → 경고도 하루 1번
+REAUTH_WARN_DAYS = 14            # refresh 만료 14일 전부터 알린다
+
+
+def _warn_reauth(location, store, token_store, send, now):
+    """refresh 토큰 만료가 가까우면 하루 1번 카톡으로 알린다.
+
+    브리핑이 성공한 뒤에만 부른다. 이 함수가 실패해도 브리핑 결과와 종료 코드는 바꾸지 않는다.
+    """
+    try:
+        tokens = token_store.load() if token_store else kakao.load_tokens()
+        days = kakao.refresh_days_left(tokens, now=now.timestamp() if now else None)
+        if days is None or days > REAUTH_WARN_DAYS:  # 모르면 가짜 경고를 보내지 않는다
+            return
+        record_id, _ = store.claim_send(location, REAUTH_CHANNEL, now=now)
+        if record_id is None:  # 오늘 이미 알렸다
+            return
+        text = (f"[재인증 필요] 카카오 로그인이 약 {max(int(days), 0)}일 뒤 만료됩니다. "
+                "PC에서 다시 인증해 주세요.")
+        try:
+            (send or kakao.send_text_to_me)(text)
+        except Exception as exc:  # 내용은 노출하지 않고 이름만 남긴다
+            _record(record_id, "failed", f"재인증 알림 발송 실패 ({type(exc).__name__})", store, now)
+            print(f"주의: 재인증 알림을 보내지 못했습니다 ({type(exc).__name__})")
+            return
+        _record(record_id, "sent", None, store, now)
+        print(f"재인증 알림 발송: 약 {max(int(days), 0)}일 남음")
+    except Exception as exc:
+        print(f"주의: 재인증 점검을 건너뜁니다 ({type(exc).__name__})")
+
 EXTERNAL_FLAG = "USE_EXTERNAL_STORE"
 
 
@@ -125,7 +155,9 @@ def main(argv=None, send=None, generate=None, db_path=None, now=None,
     if result.get("sent"):
         _record(record_id, "sent", None, store, now)
         print(f"발송 완료: {location}")
+        _warn_reauth(location, store, token_store, send, now)
         return EXIT_OK
+        
 
     error = result.get("error") or "알 수 없는 오류"
     _record(record_id, "failed", error, store, now)
