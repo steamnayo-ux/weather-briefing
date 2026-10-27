@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from weather_mcp.services import briefing
+from weather_mcp.services import briefing, life_index
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -38,10 +38,11 @@ PROMPT_RULES = """당신은 날씨 브리핑 작성자입니다. 아래 [데이�
 # 카카오톡 발송용 추가 규칙 (max_chars가 있을 때만 붙는다)
 KAKAO_RULES = """
 - 길이 제한(위의 규칙보다 우선): 공백 포함 {max_chars}자 이내, 2~3문장으로 쓰세요.
-- 값이 있는 것은 반드시 포함: 기온(°C), 강수확률(%), 미세먼지 PM10과 PM2.5의 수치와 단위(㎍/㎥), 관측 시각.
+- 값이 있는 것은 포함: 기온(°C), 강수확률(%), 관측 시각.
+- 미세먼지: [데이터]의 advice에 dust가 있을 때만 그 안내를 마지막 문장에 쓰세요. dust가 없으면 미세먼지·대기질·마스크에 대해 아무 말도 하지 마세요. dust가 없다는 것은 말할 필요가 없다는 뜻이지 정보를 못 구했다는 뜻이 아닙니다. 수치, 등급, '확인했습니다', '확인하지 못했습니다' 같은 말도 미세먼지에는 쓰지 마세요.
 - 측정소를 바꿨다거나 데이터를 어떻게 모았는지 같은 처리 과정은 말하지 마세요.
-- 값이 null이라 확인하지 못한 정보만 '확인하지 못했습니다'라고 짧게 알려 주세요(위의 warnings 규칙보다 우선)."""
-
+- 기온·강수확률 같은 날씨 값이 null이라 확인하지 못한 정보만 '확인하지 못했습니다'라고 짧게 알려 주세요(위의 warnings 규칙보다 우선). 미세먼지에는 이 규칙을 쓰지 마세요.
+- [데이터]에 advice가 있으면 첫 문장에 우산, 옷차림 순서로 결론을 쓰고, 이어서 기온·강수확률·관측 시각을 쓰세요. advice에 없는 조언은 만들지 마세요."""
 
 class AiError(Exception):
     """AI 호출 오류. 메시지에는 키나 URL이 들어가지 않게 주의한다."""
@@ -50,6 +51,11 @@ class AiError(Exception):
 def build_prompt(data: dict, max_chars: int | None = None) -> str:
     """규칙과 데이터를 하나의 프롬프트 문자열로 만든다.
     max_chars가 있으면 카카오톡 발송용 규칙을 덧붙인다."""
+        # 카카오용일 때만 생활지수 안내를 데이터에 덧붙인다 (원본 data는 바꾸지 않는다)
+    if max_chars:
+        advice = life_index.build_advice(data)
+        if advice:
+            data = {**data, "advice": advice}
     data_json = json.dumps(data, ensure_ascii=False, indent=2)
     rules = PROMPT_RULES
     if max_chars:

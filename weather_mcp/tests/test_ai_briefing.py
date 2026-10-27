@@ -95,7 +95,7 @@ def test_find_unsupported_numbers_does_not_allow_seconds():
 def test_kakao_prompt_requires_values_and_hides_process():
     prompt = ai_briefing.build_prompt({"location": "분당구"}, max_chars=150)
     assert "150자" in prompt
-    assert "PM10" in prompt and "㎍/㎥" in prompt
+    assert "°C" in prompt and "dust" in prompt  # 미세먼지는 수치가 아니라 advice의 dust 안내로 말한다
     assert "처리 과정" in prompt   # 측정소 대체 같은 내부 과정을 말하지 않게 한다
 
 
