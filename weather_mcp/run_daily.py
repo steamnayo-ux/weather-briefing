@@ -28,7 +28,17 @@ SKIP_TEXT = {
     "already_sent": "오늘은 이미 발송했습니다",
     "in_progress": "다른 실행이 발송 중입니다",
 }
+EXTERNAL_FLAG = "USE_EXTERNAL_STORE"
 
+
+def stores_from_env():
+    """USE_EXTERNAL_STORE=1이면 (Postgres 이력, Postgres 토큰), 아니면 (None, None)."""
+    if os.getenv(EXTERNAL_FLAG) != "1":
+        return None, None
+    # 여기서 가져온다: 로컬(SQLite)만 쓸 때는 DB 관련 설정이 없어도 되게
+    from weather_mcp.services.pg_history_store import PostgresHistoryStore
+    from weather_mcp.services.pg_token_store import PostgresTokenStore
+    return PostgresHistoryStore(), PostgresTokenStore()
 
 def parse_args(argv=None):
     """argv가 None이면 명령줄 인자를 읽는다. 테스트에서는 항상 목록을 직접 넘긴다."""
@@ -85,6 +95,13 @@ def main(argv=None, send=None, generate=None, db_path=None, now=None,
 
     if args.dry_run:
         return _dry_run(location, generate)
+    # 테스트나 직접 지정한 저장소가 없을 때만 환경 스위치를 본다
+    if store is None and token_store is None and db_path is None:
+        try:
+            store, token_store = stores_from_env()
+        except (StoreError, kakao.KakaoError) as exc:
+            print(f"저장소를 준비하지 못했습니다: {exc}")  # 메시지에 접속 정보는 없다
+            return EXIT_FAILED
 
     # 저장소 정하기: 안 넘기면 지금과 똑같이 동작한다
     store = store or history.SqliteHistoryStore(db_path)
