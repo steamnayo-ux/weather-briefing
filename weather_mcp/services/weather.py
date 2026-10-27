@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+from weather_mcp.services.feels_like import wind_chill_c
 from weather_mcp.services.grid import latlon_to_grid
 from weather_mcp.services.location import get_location
 from weather_mcp.services.location_resolve import LocationError
@@ -345,6 +346,8 @@ def _build_hourly(items: list[dict], date: str, start_hour: int, end_hour: int) 
             "humidity_pct": int(humidity) if humidity is not None else None,
             "wind_speed_ms": _to_float(v.get("WSD")),
         })
+        # 겨울 바람 체감온도: 방금 만든 시간별 기온·풍속으로 계산한다 (적용 범위 밖이면 None)
+        hours[-1]["wind_chill_c"] = wind_chill_c(hours[-1]["temperature_c"], hours[-1]["wind_speed_ms"])
     return hours
 
 

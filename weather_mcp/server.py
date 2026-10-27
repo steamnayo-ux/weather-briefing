@@ -26,6 +26,7 @@ def get_hourly_forecast(
     date는 '오늘', '내일', '모레' 또는 'YYYY-MM-DD' (오늘~모레까지만 가능).
     start_hour~end_hour는 0~23시이며 양쪽 시각을 포함한다.
     summary에 최대 강수확률과 비·눈이 오는 시각 목록이 들어 있다.
+    wind_chill_c는 겨울 바람 체감온도(℃)이며, 기온 10℃ 이하이고 풍속 1.3m/s 이상일 때만 값이 있고 아니면 null이다.
     예: 퇴근길 비 여부는 start_hour=17, end_hour=19, 내일 오전은 date='내일', start_hour=6, end_hour=12"""
     return weather.get_hourly_forecast(location_name, date, start_hour, end_hour)
 
