@@ -1,0 +1,51 @@
+name: daily-briefing
+
+on:
+  schedule:
+    - cron: "0 22 * * *"   # UTC 22:00 = 한국 시간 다음 날 07:00 (몇 분 늦을 수 있음)
+  workflow_dispatch:        # Actions 탭에서 수동 실행
+    inputs:
+      force:
+        description: "오늘 이미 보냈어도 다시 발송"
+        type: boolean
+        default: false
+
+# 수동 실행과 예약 실행이 겹쳐도 한 번에 하나만 돈다 (DB 중복 방지와 이중 안전장치)
+concurrency:
+  group: daily-briefing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"   # test.yml과 같은 값
+
+      - name: 의존성 설치
+        run: python -m pip install -r requirements.txt
+
+      - name: 브리핑 발송
+        env:
+          USE_EXTERNAL_STORE: "1"
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          DAILY_LOCATION: ${{ secrets.DAILY_LOCATION }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            python -m weather_mcp.run_daily --force
+          else
+            python -m weather_mcp.run_daily
+          fi
