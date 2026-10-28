@@ -145,3 +145,31 @@ def test_코드를_못_얻으면_호출_없이_None(monkeypatch):
 def test_시간_구간이_잘못되면_오류():
     with pytest.raises(ValueError):
         uv.get_uv_index_at(37.5, 127.0, "서울", "오늘", start_hour=20, end_hour=10, now=NOW)
+
+
+def test_도구용_조회_성공은_그대로_돌려준다(monkeypatch):
+    monkeypatch.setattr(uv, "get_uv_index", lambda *a, **k: {"uv_max": 4})
+    assert uv.lookup_uv_index("서울") == {"uv_max": 4}
+
+
+def test_도구용_조회는_오류를_dict로_돌려준다(monkeypatch):
+    from weather_mcp.services.location_resolve import LocationError
+
+    def boom(*a, **k):
+        raise LocationError("지역 문제")
+
+    monkeypatch.setattr(uv, "get_uv_index", boom)
+    assert uv.lookup_uv_index("어딘가") == {"error": "지역 문제"}
+
+
+def test_도구용_조회는_서비스_오류도_dict로(monkeypatch):
+    def boom(*a, **k):
+        raise uv.UvServiceError("권한 오류")
+
+    monkeypatch.setattr(uv, "get_uv_index", boom)
+    assert uv.lookup_uv_index("서울") == {"error": "권한 오류"}
+
+
+def test_도구용_조회는_값이_없으면_error(monkeypatch):
+    monkeypatch.setattr(uv, "get_uv_index", lambda *a, **k: None)
+    assert "error" in uv.lookup_uv_index("서울")        

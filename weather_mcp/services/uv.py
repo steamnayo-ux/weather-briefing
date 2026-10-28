@@ -258,3 +258,21 @@ def get_uv_index(
     if loc is None:
         raise LocationError(f"'{location_name}'에 해당하는 지역을 찾지 못했어요")
     return get_uv_index_at(loc["lat"], loc["lon"], loc["name"], date_text, start_hour, end_hour, now)
+
+
+    
+
+def lookup_uv_index(
+    location_name: str,
+    date_text: str | None = "오늘",
+    start_hour: int = 0,
+    end_hour: int = 23,
+) -> dict:
+    """MCP 도구용. 성공하면 get_uv_index 결과, 실패하면 {"error": 메시지}를 돌려준다."""
+    try:
+        result = get_uv_index(location_name, date_text, start_hour, end_hour)
+    except (LocationError, UvServiceError, ValueError) as e:
+        return {"error": str(e)}
+    if result is None:
+        return {"error": "자외선지수를 확인하지 못했어요 (지점 코드나 발표 자료를 찾지 못함)"}
+    return result

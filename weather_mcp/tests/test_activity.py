@@ -1,8 +1,19 @@
 """활동 추천 테스트. 네트워크는 쓰지 않는다."""
 import re
+import pytest
 from datetime import datetime, timedelta
 
 from weather_mcp.services import activity, weather
+
+@pytest.fixture(autouse=True)
+def _no_uv_lookup(monkeypatch):
+    """기존 활동 추천 테스트는 자외선을 보지 않는다. 실제 위치·기상청 호출을 막고
+    판정에 영향 없는 낮은 값을 돌려준다 (자외선 연결은 test_activity_uv.py가 맡는다)."""
+    monkeypatch.setattr(
+        activity.uv, "get_uv_index",
+        lambda *a, **k: {"uv_max": 1, "uv_level": "낮음", "uv_max_at": "12:00",
+                         "area_level": "읍면동", "announced_at": "x"},
+    )
 
 
 def make_hour(time="09:00", temp=15.0, pop=0, pty="없음", humidity=50, wind=2.0, chill=None):

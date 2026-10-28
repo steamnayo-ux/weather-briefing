@@ -1,7 +1,7 @@
 """MCP 서버 진입점. 도구 등록만 담당하고 로직은 services에 둔다."""
 from mcp.server.fastmcp import FastMCP
 
-from weather_mcp.services import activity, ai_briefing, air, kakao_briefing, location, weather
+from weather_mcp.services import activity, ai_briefing, air, kakao_briefing, location, uv, weather
 
 mcp = FastMCP("weather-briefing")
 
@@ -32,11 +32,24 @@ def get_hourly_forecast(
 
 
 @mcp.tool()
+def get_uv_index(
+    location_name: str, date: str = "오늘", start_hour: int = 0, end_hour: int = 23
+) -> dict:
+    """지역의 자외선지수 예보를 조회한다. 3시간 간격 예보라서 구간 안의 최대값을 돌려준다.
+    date는 '오늘', '내일', '모레', '글피' 또는 'YYYY-MM-DD'이고, start_hour~end_hour는 0~23시이다.
+    uv_max(지수), uv_level(낮음/보통/높음/매우높음/위험), uv_max_at(최대 시각)이 들어 있다.
+    지수 범위: 낮음 0~2, 보통 3~5, 높음 6~7, 매우높음 8~10, 위험 11 이상.
+    값을 구하지 못하면 error가 들어 있으니 지수를 추측하지 말고 확인하지 못했다고 알린다.
+    예: 오늘 낮 자외선은 start_hour=10, end_hour=15"""
+    return uv.lookup_uv_index(location_name, date, start_hour, end_hour)
+
+
+@mcp.tool()
 def recommend_activity(
     location_name: str, activity_name: str, date: str = "오늘",
     start_hour: int | None = None, end_hour: int | None = None
 ) -> dict:
-    """활동을 해도 좋은지 시간대별 예보와 미세먼지 규칙으로 판단한다.
+    """활동을 해도 좋은지 시간대별 예보와 미세먼지·자외선 규칙으로 판단한다.
     activity_name은 '러닝', '산책', '외출'(퇴근길·우산), '빨래' 중 하나다.
     date는 '오늘', '내일', '모레' 또는 'YYYY-MM-DD'이고, start_hour~end_hour(0~23시)를 생략하면 활동별 기본 시간대를 쓴다.
     verdict(좋음/주의/비추천/판단불가)와 reasons는 코드 규칙의 결과이므로 바꾸지 말고 그대로 설명하고,

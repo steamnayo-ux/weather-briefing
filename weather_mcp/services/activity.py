@@ -9,6 +9,8 @@ from datetime import datetime
 
 from weather_mcp.services import air, weather
 from weather_mcp.services.life_index import GRADE_RANK, UMBRELLA_MAYBE, UMBRELLA_MUST
+from weather_mcp.services import uv
+from weather_mcp.services.location_resolve import LocationError
 
 GOOD, CAUTION, AVOID, UNKNOWN = "좋음", "주의", "비추천", "판단불가"
 GOOD_REASON = "걸리는 점이 없어요"
@@ -225,9 +227,12 @@ def _worst_dust(air_data) -> int | None:
     return max(ranks) if ranks else None
 
 
+UV_UNKNOWN_NOTE = "자외선지수를 확인하지 못했어요."
+
+
 def recommend_activity(location_name: str, activity: str, date: str = "오늘",
                        start_hour: int | None = None, end_hour: int | None = None) -> dict:
-    """지역·날짜·시간대의 예보와 대기질로 활동(러닝·산책·외출·빨래)을 해도 되는지 판단한다."""
+    """지역·날짜·시간대의 예보와 대기질·자외선으로 활동(러닝·산책·외출·빨래)을 해도 되는지 판단한다."""
     kind = normalize_activity(activity)
     if kind is None:
         return {"error": f"지원하지 않는 활동입니다: {activity} (지원: 러닝, 산책, 외출, 빨래)"}
@@ -253,12 +258,31 @@ def recommend_activity(location_name: str, activity: str, date: str = "오늘",
     else:
         dust_note = DUST_TODAY_ONLY_NOTE
 
-    result = assess_activity(kind, hourly, dust_rank=dust_rank, uv_index=None, dust_note=dust_note)
+    # 자외선은 예보라서 오늘·내일·모레 모두 쓴다. 못 구해도 추천 전체는 실패시키지 않는다
+    try:
+        uv_info = uv.get_uv_index(location_name, hourly.get("date"), start, end)
+    except (uv.UvServiceError, LocationError, ValueError):
+        uv_info = None
+    uv_index = uv_info["uv_max"] if uv_info else None
+
+    result = assess_activity(kind, hourly, dust_rank=dust_rank, uv_index=uv_index, dust_note=dust_note)
+
+    # 모르는 값은 단정하지 않는다: 판정은 그대로 두고 notes로만 알린다 (이미 자외선 안내가 있으면 중복하지 않는다)
+    if uv_index is None:
+        notes = list(result.get("notes") or [])
+        if not any("자외선" in str(n) for n in notes):
+            notes.append(UV_UNKNOWN_NOTE)
+        result["notes"] = notes
+
     return {
         "location": hourly.get("location"),
         "date": hourly.get("date"),
         "collected_at": hourly.get("collected_at"),
         "forecast_base": hourly.get("forecast_base"),
         **result,
+        "uv": (
+            {k: uv_info[k] for k in ("uv_max", "uv_level", "uv_max_at", "area_level", "announced_at")}
+            if uv_info else None
+        ),
         "warnings": hourly.get("warnings", []),
     }
