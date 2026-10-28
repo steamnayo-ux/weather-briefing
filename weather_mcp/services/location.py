@@ -116,3 +116,53 @@ def get_location(name: str) -> dict | None:
         return None
     address_docs, keyword_docs = _lookup(query)
     return resolve_location(query, address_docs, keyword_docs)
+
+
+
+# ---- 좌표 → 행정구역 코드 (자외선지수 지점코드를 만들 때 사용) ----
+GEO_URL = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
+
+# 좌표가 속한 행정구역은 거의 안 바뀌므로 길게 캐시 (성공한 응답만 저장)
+REGION_CACHE = TTLCache(ttl_seconds=24 * 60 * 60)
+
+
+def get_region_codes(lat: float, lon: float) -> dict:
+    """좌표가 속한 행정구역 코드를 돌려준다.
+
+    반환: {"h_code": 행정동 코드, "b_code": 법정동 코드}. 못 찾은 값은 None.
+    장애는 LocationLookupError (키·URL은 메시지에 넣지 않는다).
+    """
+    cache_key = (round(lat, 4), round(lon, 4))
+    cached = REGION_CACHE.get(cache_key)
+    if cached is not None:
+        return cached[0]
+
+    key = os.getenv("KAKAO_REST_API_KEY")
+    if not key:
+        raise LocationLookupError("KAKAO_REST_API_KEY가 설정되지 않았습니다 (.env 확인)")
+    try:
+        resp = httpx.get(
+            GEO_URL,
+            headers={"Authorization": f"KakaoAK {key}"},
+            params={"x": lon, "y": lat},  # 카카오는 x=경도, y=위도
+            timeout=TIMEOUT,
+        )
+    except httpx.HTTPError:
+        raise LocationLookupError("지역 검색 서비스에 연결하지 못했습니다") from None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    docs = _parse_response(resp.status_code, body)
+
+    codes = {"h_code": None, "b_code": None}
+    for doc in docs:
+        code = (doc.get("code") or "").strip()
+        if not code:
+            continue
+        if doc.get("region_type") == "H":    # 행정동
+            codes["h_code"] = code
+        elif doc.get("region_type") == "B":  # 법정동
+            codes["b_code"] = code
+    REGION_CACHE.set(cache_key, codes, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return codes
