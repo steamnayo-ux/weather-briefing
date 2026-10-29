@@ -33,6 +33,7 @@ remote_mcp = FastMCP(
     "weather-briefing-remote",
     host=os.environ.get("HOST", "127.0.0.1"),
     port=int(os.environ.get("PORT", "8000")),
+    stateless_http=True,  # 서버가 꺼졌다 켜져도 문제없게 요청마다 독립 처리
 )
 
 for _fn in READ_ONLY_TOOLS:
