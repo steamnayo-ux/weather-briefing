@@ -2,7 +2,9 @@ name: daily-briefing
 
 on:
   schedule:
-    - cron: "7 22 * * *"   # UTC 22:07 = 한국 시간 다음 날 07:07
+    - cron: "7 22 * * *"    # UTC 22:07 = 한국 시간 다음 날 07:07 (원래 시각)
+    - cron: "37 22 * * *"   # UTC 22:37 = 한국 07:37 (예비 1)
+    - cron: "7 23 * * *"    # UTC 23:07 = 한국 08:07 (예비 2)
   workflow_dispatch:        # Actions 탭에서 수동 실행
     inputs:
       force:
