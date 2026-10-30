@@ -84,10 +84,14 @@ class PostgresHistoryStore:
         try:
             if self.schema:  # 테스트 전용: 임시 공간을 만들고 그 안에서만 작업한다
                 conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
-                conn.execute(f"SET search_path TO {self.schema}")
+                # LOCAL: 이 트랜잭션 안에서만 유효. 풀러의 서버 연결에 설정이 남지 않는다
+                conn.execute(f"SET LOCAL search_path TO {self.schema}")
+            else:
+                # 운영: 이전 사용자가 남긴 설정과 상관없이 항상 기본 공간을 쓴다
+                conn.execute("SET LOCAL search_path TO public")
             conn.execute(SCHEMA)
         except Exception:
-            conn.close()  # 준비 단계에서 실패하면 연결을 닫고 알린다
+            conn.close()
             raise
         return conn
 

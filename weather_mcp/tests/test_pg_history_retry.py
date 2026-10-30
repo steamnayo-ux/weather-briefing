@@ -80,3 +80,31 @@ def test_준비_단계에서_실패하면_연결을_닫는다(monkeypatch, waits
     with pytest.raises(psycopg.OperationalError):
         make_store()._connect()
     assert conn.closed is True
+
+
+class RecordingConn:
+    """실행된 SQL을 기록하는 가짜 연결."""
+    def __init__(self):
+        self.sqls = []
+
+    def execute(self, sql, *args):
+        self.sqls.append(sql)
+        return self
+
+    def close(self):
+        pass
+
+
+def test_운영_연결은_search_path를_public으로_고정한다(monkeypatch, waits):
+    conn = RecordingConn()
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **k: conn)
+    make_store()._connect()  # schema=None: 운영 경로
+    assert conn.sqls[0] == "SET LOCAL search_path TO public"
+    assert "CREATE TABLE" in conn.sqls[1]
+
+
+def test_테스트_스키마도_LOCAL로_격리한다(monkeypatch, waits):
+    conn = RecordingConn()
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **k: conn)
+    PostgresHistoryStore(database_url="postgresql://u:p@h/d", schema="t1")._connect()
+    assert "SET LOCAL search_path TO t1" in conn.sqls
