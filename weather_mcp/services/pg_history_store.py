@@ -6,6 +6,7 @@ SqliteHistoryStore와 같은 규칙을 지킨다 (계약 테스트로 확인).
 - 오류 메시지에는 접속 정보를 넣지 않고 예외 이름만 넣는다.
 """
 import os
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,13 @@ from weather_mcp.services.store import StoreError
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 CONNECT_TIMEOUT_SEC = 15  # 잠든 무료 DB가 깨어나는 시간을 기다린다
+
+CONNECT_RETRY_WAITS = (2, 5)  # 연결 실패 시 2초, 5초 기다렸다 다시 시도 (총 3회)
+
+
+def _sleep(seconds):
+    """테스트에서 실제로 기다리지 않게 바꿔 끼울 수 있도록 따로 둔다."""
+    time.sleep(seconds)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS send_log (
@@ -57,14 +65,30 @@ class PostgresHistoryStore:
             raise StoreError("DATABASE_URL이 없습니다.")
         self.schema = schema  # None이면 기본 공간(실제 운영), 값이 있으면 테스트용 임시 공간
 
+    def _open(self):
+        """연결만 재시도한다. 연결 실패는 DB를 건드리기 전이라 반복해도 안전하다."""
+        for wait in (*CONNECT_RETRY_WAITS, None):
+            try:
+                return psycopg.connect(
+                    self.database_url,
+                    connect_timeout=CONNECT_TIMEOUT_SEC,
+                    row_factory=dict_row,
+                )
+            except psycopg.OperationalError:
+                if wait is None:  # 마지막 시도도 실패: 호출한 쪽(_as_store_error)이 이름만 남긴다
+                    raise
+                _sleep(wait)
+
     def _connect(self):
-        conn = psycopg.connect(
-            self.database_url, connect_timeout=CONNECT_TIMEOUT_SEC, row_factory=dict_row
-        )
-        if self.schema:  # 테스트 전용: 임시 공간을 만들고 그 안에서만 작업한다
-            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
-            conn.execute(f"SET search_path TO {self.schema}")
-        conn.execute(SCHEMA)
+        conn = self._open()
+        try:
+            if self.schema:  # 테스트 전용: 임시 공간을 만들고 그 안에서만 작업한다
+                conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
+                conn.execute(f"SET search_path TO {self.schema}")
+            conn.execute(SCHEMA)
+        except Exception:
+            conn.close()  # 준비 단계에서 실패하면 연결을 닫고 알린다
+            raise
         return conn
 
     def claim_send(self, location, channel, now=None):
