@@ -40,10 +40,16 @@ for _fn in READ_ONLY_TOOLS:
     remote_mcp.tool()(_fn)  # server.py의 함수를 그대로 등록
 
 
+# 원격 서버가 시작할 때 반드시 있어야 하는 환경변수
+REQUIRED_ENV = ["REMOTE_API_KEY", "DATA_GO_KR_API_KEY"]
+
+
 def create_app():
-    """키 인증이 붙은 ASGI 앱. 키 설정이 없으면 여기서 예외가 나 서버가 뜨지 않는다."""
+    """키 인증이 붙은 ASGI 앱. 필수 환경변수가 빠지면 여기서 예외가 나 서버가 뜨지 않는다."""
+    from weather_mcp.env_check import require_env
     from weather_mcp.remote_auth import ApiKeyMiddleware, load_remote_key
 
+    require_env(REQUIRED_ENV)  # 가장 먼저 점검: 빠진 이름을 한 번에 알려 준다
     return ApiKeyMiddleware(remote_mcp.streamable_http_app(), load_remote_key())
 
 
