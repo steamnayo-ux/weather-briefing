@@ -18,6 +18,9 @@ from weather_mcp.server import (
     search_location,
 )
 
+# 원격으로 나가는 응답·설명만 다듬는다 (warnings -> data_notes, 특보 미제공 표시)
+from weather_mcp.tool_output import describe_tool, wrap_tool
+
 # 허용 목록: 여기에 적은 도구만 원격에 열린다
 READ_ONLY_TOOLS = [
     search_location,
@@ -37,7 +40,8 @@ remote_mcp = FastMCP(
 )
 
 for _fn in READ_ONLY_TOOLS:
-    remote_mcp.tool()(_fn)  # server.py의 함수를 그대로 등록
+    # 원본 함수는 그대로 두고, 응답은 wrap_tool로 설명은 describe_tool로 다듬어 등록한다
+    remote_mcp.tool(description=describe_tool(_fn))(wrap_tool(_fn))
 
 
 # 원격 서버가 시작할 때 반드시 있어야 하는 환경변수

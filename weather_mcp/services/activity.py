@@ -227,6 +227,69 @@ def _worst_dust(air_data) -> int | None:
     return max(ranks) if ranks else None
 
 
+# 비가 오지 않는 시각의 precipitation_type 값 (이 값이 아닌 문자열이면 비나 눈으로 본다)
+NO_PRECIP_TYPES = ("", "없음")
+
+
+def _hour_of(item: dict) -> int | None:
+    """시간별 예보 한 칸의 'HH:00'에서 시(정수)를 뽑는다. 읽을 수 없으면 None."""
+    try:
+        return int(str(item.get("time"))[:2])
+    except (TypeError, ValueError):
+        return None
+
+
+def _hour_ok(item: dict, kind: str) -> bool:
+    """한 시각이 활동하기에 괜찮은가. 모르는 값(None)은 규칙을 적용하지 않는다."""
+    ptype = item.get("precipitation_type")
+    if isinstance(ptype, str) and ptype not in NO_PRECIP_TYPES:
+        return False
+    if _ge(item.get("precipitation_probability"), RAIN_MAYBE):
+        return False
+    if kind in ("러닝", "산책") and _ge(item.get("temperature_c"), HOT_C):
+        return False
+    if kind == "러닝" and _ge(item.get("wind_speed_ms"), RUN_WIND_MS):
+        return False
+    if kind == "빨래" and _ge(item.get("humidity_pct"), LAUNDRY_HUMIDITY_PCT):
+        return False
+    return True
+
+
+def find_best_window(hours: list, activity: str, min_hour: int | None = None) -> dict | None:
+    """괜찮은 시각이 가장 길게 이어지는 구간을 찾는다. 없으면 None.
+
+    min_hour: 이 시각 이전은 제외한다 (오늘이면 지금 시각). 길이가 같으면 이른 구간.
+    네트워크를 쓰지 않는 순수 함수다.
+    """
+    kind = normalize_activity(activity)
+    if kind is None:
+        return None
+
+    candidates = []
+    for item in hours or []:
+        h = _hour_of(item)
+        if h is None or (min_hour is not None and h < min_hour):
+            continue
+        candidates.append((h, item))
+    candidates.sort(key=lambda pair: pair[0])
+
+    best, run = None, []   # run: 지금 이어지고 있는 구간의 시각 목록
+
+    def close_run():
+        nonlocal best
+        if run and (best is None or len(run) > best["hours"]):   # 같으면 먼저 찾은(이른) 구간 유지
+            best = {"start": f"{run[0]:02d}:00", "end": f"{run[-1]:02d}:00", "hours": len(run)}
+
+    for h, item in candidates:
+        if _hour_ok(item, kind) and (not run or h == run[-1] + 1):
+            run.append(h)
+            continue
+        close_run()
+        run = [h] if _hour_ok(item, kind) else []   # 끊긴 시각이 괜찮으면 새 구간 시작
+    close_run()
+    return best
+
+
 UV_UNKNOWN_NOTE = "자외선지수를 확인하지 못했어요."
 
 
@@ -267,6 +330,11 @@ def recommend_activity(location_name: str, activity: str, date: str = "오늘",
 
     result = assess_activity(kind, hourly, dust_rank=dust_rank, uv_index=uv_index, dust_note=dust_note)
 
+    # 괜찮은 시각이 가장 길게 이어지는 구간 (오늘이면 지난 시각은 뺀다)
+    now = datetime.now(weather.KST)
+    min_hour = now.hour if hourly.get("date") == now.date().isoformat() else None
+    best_window = find_best_window(hourly.get("hours") or [], kind, min_hour=min_hour)
+
     # 모르는 값은 단정하지 않는다: 판정은 그대로 두고 notes로만 알린다 (이미 자외선 안내가 있으면 중복하지 않는다)
     if uv_index is None:
         notes = list(result.get("notes") or [])
@@ -280,6 +348,7 @@ def recommend_activity(location_name: str, activity: str, date: str = "오늘",
         "collected_at": hourly.get("collected_at"),
         "forecast_base": hourly.get("forecast_base"),
         **result,
+        "best_window": best_window,
         "uv": (
             {k: uv_info[k] for k in ("uv_max", "uv_level", "uv_max_at", "area_level", "announced_at")}
             if uv_info else None
