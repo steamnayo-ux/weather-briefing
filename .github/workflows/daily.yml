@@ -11,6 +11,10 @@ on:
         description: "오늘 이미 보냈어도 다시 발송"
         type: boolean
         default: false
+      location:
+        description: "발송 지역 (비우면 기본 지역). 예: 경기 성남시 분당구"
+        type: string
+        default: ""  
 
 # 수동 실행과 예약 실행이 겹쳐도 한 번에 하나만 돈다 (DB 중복 방지와 이중 안전장치)
 concurrency:
@@ -43,7 +47,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
-          DAILY_LOCATION: ${{ secrets.DAILY_LOCATION }}
+          DAILY_LOCATION: ${{ inputs.location || secrets.DAILY_LOCATION }}
           FORCE: ${{ inputs.force }}
         run: |
           if [ "$FORCE" = "true" ]; then

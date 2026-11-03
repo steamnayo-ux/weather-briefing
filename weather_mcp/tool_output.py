@@ -24,6 +24,9 @@ EXTRA_DESCRIPTIONS = {
     "recommend_activity": (
         " 좋은 시간대를 물으면 best_window(괜찮은 시각이 가장 길게 이어지는 구간, end 는 마지막 예보 시각)를"
         " 그대로 알려 준다. best_window 가 null 이면 괜찮은 시간대가 없다고 말하고 시각을 지어내지 않는다."
+        " 응답에 없는 내용은 덧붙이지 않는다. 건조 시간, 습도가 높다 낮다는 평가, 옷차림, 실내 건조 같은 조언은"
+        " 응답에 근거가 없으면 말하지 않고, 판정(verdict), 이유(reasons), 준비물(items), 수치(details),"
+        " best_window만 그대로 전달한다."
     ),
 }
 
