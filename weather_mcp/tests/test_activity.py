@@ -6,6 +6,13 @@ from datetime import datetime, timedelta
 from weather_mcp.services import activity, weather
 
 @pytest.fixture(autouse=True)
+def _fixed_clock(monkeypatch):
+    """오늘 0시로 시계를 고정한다. 실행 시각에 따라 결과가 달라지지 않게 한다."""
+    monkeypatch.setattr(activity, "_now_kst",
+                        lambda: datetime.now(weather.KST).replace(hour=0, minute=0))
+    
+
+@pytest.fixture(autouse=True)
 def _no_uv_lookup(monkeypatch):
     """기존 활동 추천 테스트는 자외선을 보지 않는다. 실제 위치·기상청 호출을 막고
     판정에 영향 없는 낮은 값을 돌려준다 (자외선 연결은 test_activity_uv.py가 맡는다)."""

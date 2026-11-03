@@ -227,6 +227,8 @@ def _worst_dust(air_data) -> int | None:
     return max(ranks) if ranks else None
 
 
+# ---- 괜찮은 시간대(best_window) 계산 ----
+
 # 비가 오지 않는 시각의 precipitation_type 값 (이 값이 아닌 문자열이면 비나 눈으로 본다)
 NO_PRECIP_TYPES = ("", "없음")
 
@@ -293,6 +295,11 @@ def find_best_window(hours: list, activity: str, min_hour: int | None = None) ->
 UV_UNKNOWN_NOTE = "자외선지수를 확인하지 못했어요."
 
 
+def _now_kst() -> datetime:
+    """현재 한국 시각. 테스트에서 시계를 고정하려고 따로 뺐다."""
+    return datetime.now(weather.KST)
+
+
 def recommend_activity(location_name: str, activity: str, date: str = "오늘",
                        start_hour: int | None = None, end_hour: int | None = None) -> dict:
     """지역·날짜·시간대의 예보와 대기질·자외선으로 활동(러닝·산책·외출·빨래)을 해도 되는지 판단한다."""
@@ -314,9 +321,17 @@ def recommend_activity(location_name: str, activity: str, date: str = "오늘",
     if "error" in hourly:
         return hourly
 
+    # 오늘이면 지난 시각을 빼고 요약도 다시 계산한다 (발표 직전에는 이미 지난 시각이 섞인다)
+    now = _now_kst()
+    is_today = hourly.get("date") == now.date().isoformat()
+    if is_today:
+        kept = [h for h in hourly.get("hours") or []
+                if _hour_of(h) is None or _hour_of(h) >= now.hour]
+        hourly = {**hourly, "hours": kept, "summary": weather._summarize_hours(kept)}
+
     # 에어코리아는 '현재 측정값'만 주므로 오늘 판단에만 쓴다
     dust_rank, dust_note = None, DUST_UNKNOWN_NOTE
-    if hourly.get("date") == datetime.now(weather.KST).date().isoformat():
+    if is_today:
         dust_rank = _worst_dust(air.get_air_quality_by_name(location_name))
     else:
         dust_note = DUST_TODAY_ONLY_NOTE
@@ -331,9 +346,8 @@ def recommend_activity(location_name: str, activity: str, date: str = "오늘",
     result = assess_activity(kind, hourly, dust_rank=dust_rank, uv_index=uv_index, dust_note=dust_note)
 
     # 괜찮은 시각이 가장 길게 이어지는 구간 (오늘이면 지난 시각은 뺀다)
-    now = datetime.now(weather.KST)
-    min_hour = now.hour if hourly.get("date") == now.date().isoformat() else None
-    best_window = find_best_window(hourly.get("hours") or [], kind, min_hour=min_hour)
+    best_window = find_best_window(hourly.get("hours") or [], kind,
+                                   min_hour=now.hour if is_today else None)
 
     # 모르는 값은 단정하지 않는다: 판정은 그대로 두고 notes로만 알린다 (이미 자외선 안내가 있으면 중복하지 않는다)
     if uv_index is None:
