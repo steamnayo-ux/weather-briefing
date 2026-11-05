@@ -194,3 +194,27 @@ def test_지원하지_않는_활동은_422(client, monkeypatch):
     assert response.status_code == 422
     assert body["error"]["code"] == "INVALID_PARAM"
     assert "러닝" in body["error"]["message"]
+
+
+def test_예보_범위_초과_날짜는_422로_올라간다():
+    from weather_mcp.api_response import ApiError, ok_body
+
+    # 서비스가 실제로 돌려주는 메시지 (앞부분이 INPUT_ERROR_PREFIXES와 맞아야 한다)
+    result = {"error": "단기예보는 오늘부터 모레까지만 조회할 수 있습니다"}
+
+    with pytest.raises(ApiError) as info:
+        ok_body(result, "get_hourly_forecast")
+
+    assert info.value.status_code == 422
+    assert info.value.code == "INVALID_PARAM"
+
+
+def test_알_수_없는_서비스_오류는_여전히_502다():
+    import pytest
+    from weather_mcp.api_response import ApiError, ok_body
+
+    with pytest.raises(ApiError) as info:
+        ok_body({"error": "기상청 서버에 연결하지 못했습니다"}, "get_weather")
+
+    assert info.value.status_code == 502
+    assert info.value.code == "UPSTREAM_ERROR"

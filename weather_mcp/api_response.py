@@ -11,6 +11,7 @@ from weather_mcp.tool_output import SPECIAL_REPORT_TOOLS, present_tool_result
 INPUT_ERROR_PREFIXES = (
     "날짜를 이해하지 못했습니다",
     "지원하지 않는 활동입니다",
+    "단기예보는 오늘부터 모레까지만",  # 예보 범위를 벗어난 날짜도 사용자 입력 오류
 )
 
 
