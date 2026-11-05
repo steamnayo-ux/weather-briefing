@@ -18,7 +18,7 @@ export default async function HourlyCard({ location }: { location: string }) {
       footer={<>예보 기준 {fmtCompact(r.forecast_base)} · 수집 {fmtIso(r.collected_at)}</>}
     >
       <p className="text-sm text-zinc-500">
-        {r.date} 최저/최고 {val(s.temp_min_c, "°")} / {val(s.temp_max_c, "°")} · 최대 강수확률{" "}
+        {r.date} 남은 시간 기준 최저/최고 {val(s.temp_min_c, "°")} / {val(s.temp_max_c, "°")} · 최대 강수확률{" "}
         {val(s.precipitation_probability_max, "%")}
       </p>
       {/* 좁은 화면에서는 표 안에서만 가로 스크롤 */}
