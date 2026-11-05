@@ -12,7 +12,8 @@ def test_sends_when_briefing_ok():
     result = kakao_briefing.send_briefing_to_kakao(
         "서울 강남구", generate=fake_ok, send=lambda text: sent.append(text))
     assert result["sent"] is True
-    assert sent == ["맑고 기온은 18도입니다."]
+    # 카톡 맨 위에 지역 한 줄이 붙고, 그 아래에 브리핑 원문이 그대로 온다
+    assert sent == ["📍 서울 강남구\n맑고 기온은 18도입니다."]
 
 
 def test_does_not_send_when_briefing_has_error():
@@ -76,3 +77,19 @@ def test_build_prompt_with_limit_adds_rule():
     prompt = ai_briefing.build_prompt({"a": 1}, max_chars=150)
     assert "길이 제한" in prompt
     assert "150자" in prompt
+
+
+def test_확정된_지역명이_입력한_이름보다_우선한다():
+    sent = []
+
+    def fake_generate(location, max_chars):
+        # 입력은 "분당구"지만 확정된 지역명은 더 자세히 돌아온다고 가정
+        return {"briefing": "오늘은 맑아요.", "location": "경기 성남시 분당구"}
+
+    result = kakao_briefing.send_briefing_to_kakao(
+        "분당구", generate=fake_generate, send=sent.append)
+
+    assert result["sent"] is True
+    assert sent[0].splitlines()[0] == "📍 경기 성남시 분당구"
+    assert sent[0].splitlines()[1] == "오늘은 맑아요."
+    assert result["briefing"] == "오늘은 맑아요."  # 반환값은 AI 원문 그대로

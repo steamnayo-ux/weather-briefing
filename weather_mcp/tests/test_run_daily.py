@@ -68,7 +68,8 @@ def test_env_location_is_used(monkeypatch, tmp_path):
     code = run([], db, send)
 
     assert code == 0
-    assert send.sent == [TEXT]
+    # 카톡 맨 위에 지역 한 줄이 붙고, 그 아래에 브리핑 원문이 온다
+    assert send.sent == [f"📍 분당구\n{TEXT}"]
     assert record(db)["status"] == "sent"
 
 
@@ -112,7 +113,8 @@ def test_failed_run_can_be_retried(tmp_path):
     assert run(["--location", "분당구"], db, send, bad) == 1
     assert run(["--location", "분당구"], db, send) == 0   # 같은 날 재시도 허용
 
-    assert send.sent == [TEXT]
+    # 카톡 맨 위에 지역 한 줄이 붙고, 그 아래에 브리핑 원문이 온다
+    assert send.sent == [f"📍 분당구\n{TEXT}"]
     assert record(db)["status"] == "sent"
     assert record(db)["error"] is None
 
