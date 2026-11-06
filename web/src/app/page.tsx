@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import ActivityCard from "@/components/ActivityCard";
 import AirCard from "@/components/AirCard";
 import { CardSkeleton } from "@/components/Card";
+import ChatPanel from "@/components/ChatPanel"; // ← 추가
 import HourlyCard from "@/components/HourlyCard";
 import UvCard from "@/components/UvCard";
 import WeatherCard from "@/components/WeatherCard";
@@ -35,6 +36,11 @@ export default function Home() {
         <Suspense fallback={<CardSkeleton title="자외선" />}>
           <UvCard location={LOCATION} />
         </Suspense>
+      </div>
+
+      {/* 웹 채팅: 클라이언트 컴포넌트. 카드와 분리해 아래에 둔다 */}
+      <div className="mt-6">
+        <ChatPanel />
       </div>
     </main>
   );

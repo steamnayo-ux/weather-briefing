@@ -152,3 +152,17 @@ export const getRecommendation = (loc: string, activity: string) =>
     [LOCATION_PARAM]: loc,
     [ACTIVITY_PARAM]: activity,
   });
+
+
+  // ---- 채팅 (D단계) ----
+export type ChatToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+  error: string | null; // 실패 시 문구 (정확한 모양은 미확인이라 느슨하게)
+};
+
+export type ChatReply = {
+  answer: string;
+  tool_calls: ChatToolCall[];
+  steps: number;
+};
