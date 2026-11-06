@@ -28,6 +28,11 @@ EXTRA_DESCRIPTIONS = {
         " 응답에 근거가 없으면 말하지 않고, 판정(verdict), 이유(reasons), 준비물(items), 수치(details),"
         " best_window만 그대로 전달한다."
     ),
+    "get_weather": (
+        " 예보 기준 시각을 말할 때는 응답의 forecast_base 값만 쓴다."
+        " forecast_for 는 예보가 가리키는 대상 시각이라 기준 시각으로 말하지 않는다."
+        " 관측 시각은 observed_at, 수집 시각은 collected_at 이다."
+    ),
 }
 
 
