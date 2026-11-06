@@ -26,8 +26,8 @@ export default async function WeatherCard({ location }: { location: string }) {
       <Row label="강수" value={`${r.precipitation_type} (${val(r.precipitation_mm, "mm")})`} />
       <Row label="바람" value={val(r.wind_speed_ms, " m/s")} />
       {/* 현재(관측)와 오늘 예보 최저/최고는 출처가 달라 값이 어긋날 수 있어서 라벨을 나눈다 */}
-      <Row label="예보 최저/최고" value={`${val(r.temp_min_c, "°")} / ${val(r.temp_max_c, "°")}`} />
-      <Row label="최대 강수확률" value={val(r.precipitation_probability_max, "%")} />
+      <Row label="하루 최저/최고" value={`${val(r.temp_min_c, "°")} / ${val(r.temp_max_c, "°")}`}/>
+      <Row label="하루 최대 강수확률" value={val(r.precipitation_probability_max, "%")} />
       {/* LLM이 아니라 코드가 고정하는 문구: warnings가 비어도 "특보 없음"이라고 하지 않는다 */}
       <Row label="기상특보" value={r.special_weather_report === "not_provided" ? "미제공" : r.special_weather_report} />
       <Notes notes={r.data_notes} />
